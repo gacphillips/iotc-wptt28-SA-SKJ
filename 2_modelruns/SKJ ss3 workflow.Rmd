@@ -1,0 +1,1835 @@
+---
+title: "SS3_workflow - SKJ Stock Assessment 2026"
+author: "Genevieve Phillips"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This markdown details the running of the Indian Ocean skipjack tuna stock assessment for 2026 in Stock Synthesis 3.30.
+
+Firstly, the data input are created from data provided by the Data Team at IOTC, by running the markdown found in the folder "1_datainput". Data from the data team are stored in folders in the folder "data", to preserve the data used for the running of the assessment (to make re-running the model easy to do). Each component of the data e.g. CE / CPUE are stored in a separate folder. In the future, code could be updated by linking directly to a URL for the data at the time point of creation for the assessment. 
+
+The data input markdown ingests raw data and outputs the assessment data in the folder "data/SS3_input".
+
+This markdown edits the SS3 input files using the R package "r4ss" using data from that folder. It is worth thoroughly checking each input file sequentially **before** running a model to double check that edits to the input files have been completed as intended.
+
+Each model is run and then diagnostics (basic) are produced.
+
+At the end of the updated models, and sensitivity runs, the ensemble (or "grid") is produced, and run, followed by the KOBE plots necessary for stock status.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+
+easypackages::libraries("r4ss", "dplyr")
+
+source("../1_dataprep/functions/init.R")
+
+mod_path <- paste0(PATH_MODELRUNS,"0_base_2023",sep="")
+
+```
+
+# Update model with new data {.tabset}
+
+## Start with reference model from 2023: [DONE 14-05-26]
+
+New dataset provided 12-05-26.
+
+## Updated R etc.
+
+2023 model is called **xxx** in the report. Renamed as **0_base_2023**.
+
+SS3 version = 2.30.24
+
+R version = 4.6.0 -- "Because it was There"
+
+```{r run_2023}
+
+mod_path <- paste0(PATH_MODELRUNS,"0_base_2023",sep="")
+
+r4ss::run(dir = mod_path,
+          exe = paste0(mod_path, "/ss3_win.exe", sep=""), 
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "console_output.txt",
+          extras = "-nohess",
+          verbose = TRUE)
+
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics.
+
+```{r diagnostic_run_2022, eval=FALSE}
+
+replist <- SS_output("./0_base_2023/")
+
+print(replist$SBzero)
+print(replist$current_depletion)
+
+SS_plots(replist, minbthresh = 0.20)
+# > print(replist$SBzero)
+# [1] 1717570
+# > print(replist$current_depletion)
+# [1] 0.7241335
+##SPR at MSY: 0.345
+```
+
+## Fix .DAT errors in base_2023 model
+
+```{r fix_errors}
+
+update_base_mod <- paste0(PATH_MODELRUNS,"0_update_base_2023",sep="")
+copy_SS_inputs(dir.old = mod_path, dir.new = update_base_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE) ##update exe.
+
+inputs <- SS_read(dir = update_base_mod)
+
+## first - add_to_comp for length comp
+
+dat <- inputs$dat
+
+dat$len_info$addtocomp <- c(0.001,0.001,0.001,0.001,0.001,0.001,0.001,0.001,0.001,0.001,0.001)
+
+dat$fleetinfo$surveytiming <- c(-1,-1,-1,-1,-1,-1,-1,1,1,1,1)
+
+inputs$dat <- dat
+
+```
+
+## Fix .CTL errors in base_2023 model
+
+```{r fix_errors_ctl}
+
+ctl <- inputs$ctl
+
+ctl$MG_parms[6,1] <- 0
+
+ctl$size_selex_parms[65,1:4] <- c(20,20,20,20)
+ctl$size_selex_parms[67,1:4] <- c(20,20,20,20)
+ctl$size_selex_parms[69,1:4] <- c(20,20,20,20)
+ctl$size_selex_parms[71,1:4] <- c(20,20,20,20)
+
+ctl$size_selex_parms[4,1:2] <- c(10,100)
+ctl$size_selex_parms[5,1:2] <- c(10,100)
+ctl$size_selex_parms[6,1:2] <- c(10,100)
+ctl$size_selex_parms[7,1:2] <- c(10,100)
+ctl$size_selex_parms[8,1:2] <- c(10,100)
+ctl$size_selex_parms[9,1:2] <- c(10,100)
+ctl$size_selex_parms[10,1:2] <- c(10,100)
+ctl$size_selex_parms[21,1:2] <- c(10,100)
+ctl$size_selex_parms[22,1:2] <- c(10,100)
+ctl$size_selex_parms[23,1:2] <- c(10,100)
+ctl$size_selex_parms[24,1:2] <- c(10,100)
+ctl$size_selex_parms[25,1:2] <- c(10,100)
+ctl$size_selex_parms[34,1:2] <- c(10,100)
+ctl$size_selex_parms[35,1:2] <- c(10,100)
+ctl$size_selex_parms[36,1:2] <- c(10,100)
+ctl$size_selex_parms[37,1:2] <- c(10,100)
+ctl$size_selex_parms[38,1:2] <- c(10,100)
+
+ctl$size_selex_parms[44,1:2] <- c(26,94)
+ctl$size_selex_parms[50,1:2] <- c(26,94)
+ctl$size_selex_parms[58,1:2] <- c(26,94)
+
+
+
+inputs$ctl <- ctl
+
+SS_write(inputs, dir = update_base_mod, overwrite = TRUE)
+
+```
+
+```{r run_update_base}
+
+r4ss::run(dir = update_base_mod,
+          exe = paste0(update_base_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_catch_console_output.txt",
+          extras = "-nohess -maxfn 5000", ##second running do this
+          verbose = TRUE)
+
+replist_ub <- SS_output("./0_update_base_2023/")
+print(replist_ub$SBzero)
+# [1] 1669900
+# 1642720
+print(replist_ub$current_depletion)
+# 0.7054913
+# 0.7089522
+
+
+SS_plots(replist_ub, minbthresh = 0.20)
+
+```
+
+## Update catch: [DONE with up to 2024 CATCH 14-05-26]
+
+### Create new model directory using old data
+
+ss3 executable is 3.25.1 (August 2026)
+
+```{r model_directory}
+
+update_catch_mod <- paste0(PATH_MODELRUNS,"1_update_catch",sep="")
+# make new model folder to update with new catch data
+copy_SS_inputs(dir.old = update_base_mod, dir.new = update_catch_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = FALSE) ##update exe.
+
+```
+
+### Read in SS files
+
+```{r read_inputs}
+inputs <- SS_read(dir = update_catch_mod)
+
+```
+
+### Update years to end 2025
+
+Model is structured in years
+
+```{r update_year}
+
+inputs$dat$styr ##1950
+inputs$dat$endyr
+inputs$dat$endyr <- 2025 
+
+```
+
+### Update rec devs to appropriate final quarter
+
+```{r update_rec_devs}
+
+## will need to update these to 2024
+
+inputs$ctl$last_yr_fullbias_adj <- 2024
+#[1] 2021
+inputs$ctl$MainRdevYrLast <- 2024
+#[1] 2021
+inputs$ctl$first_recent_yr_nobias_adj <- 2024
+#[1] 2021
+
+inputs$ctl$MG_parms[21,11] <- 2024 ##update recruitment dev_maxyr to 2021 (last ass was 2018 - see what happens then move to 2023...?)
+inputs$ctl$MG_parms[22,11] <- 2024
+inputs$ctl$MG_parms[23,11] <- 2024
+
+
+```
+
+### Update catch data
+
+```{r update_catch}
+
+catch <-inputs$dat$catch
+new_catch <- read.csv(file = paste0(PATH_SS3_INPUT,"SS3catch2026.csv",sep=""))
+
+new_catch <- new_catch %>% mutate(catch_se = 0.1) ## add generic CV of 0.1
+new_catch <- new_catch %>% select(-X)
+
+names(new_catch) <- names(catch)
+inputs$dat$catch <- new_catch
+
+```
+
+### Update starter file
+
+```{r update_starter}
+
+starter <- inputs$start
+starter$maxyr_sdreport <- -1
+starter$prior_like <- 1
+starter$timevary_bio_4SRR <- 1    #_timevary_bio_4SRR
+
+
+
+inputs$start <- starter
+
+```
+
+### Update forecast file
+
+```{r update_forecast}
+
+forecast <- inputs$fore
+forecast$benchmarks <- 1
+forecast$MSY <- 2
+forecast$SPRtarget <- 0.4
+forecast$Btarget <- 0.4
+forecast$Bmark_years <- c(0,0,0,0,0,0,1950,0,1950,0)
+forecast$Bmark_relF_Basis <- 1
+forecast$Forecast <- 0
+
+inputs$fore <- forecast
+
+```
+
+### Output new catch_model
+
+```{r output}
+
+SS_write(inputs, dir = update_catch_mod, overwrite = TRUE)
+
+## DOUBLE CHECK INPUTS
+
+```
+
+### Run model - new catch
+
+```{r run_new_catch_model, eval=FALSE}
+
+r4ss::run(dir = update_catch_mod,
+          exe = paste0(update_catch_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_catch_console_output.txt",
+          extras = "-no hess, -maxfn 5000",
+          # extras = "-nohess", ##second running do this
+          verbose = TRUE)
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics.
+
+```{r diagnostic_catch_update, eval=FALSE}
+
+replist_catch <- SS_output("./1_update_catch/")
+print(replist_catch$SBzero)
+# [1] 1683270
+print(replist_catch$current_depletion)
+
+#0.2857766
+#0.2662936 --> with recdev to 2021 (area)
+# 0.266296 --> with recdev to 2024 (area)
+SS_plots(replist_catch, minbthresh = 0.20)
+
+```
+
+## Update length-frequency data [DONE 27-08-26] No filtering
+
+Add in new length-frequency data.
+
+```{r update_lfdata}
+update_lf_mod <- paste0(PATH_MODELRUNS, "2_update_lf1",sep="") #new model directory
+copy_SS_inputs(dir.old = update_catch_mod, dir.new = update_lf_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+inputs_lf <- SS_read(dir = update_lf_mod)
+max(inputs_lf$dat$lencomp$year)
+
+lf <- inputs_lf$dat$lencomp
+
+new_lf <- read.csv(file = paste0(PATH_SS3_INPUT,"SS3LFinput1.csv",sep="")) ## add in the new LF data
+max(new_lf$Year)
+
+new_lf <- new_lf %>% select(-X)
+names(new_lf) <- names(lf)
+inputs_lf$dat$lencomp <- new_lf ## replace data
+
+```
+
+### Update model with new lf
+
+```{r update_new_lf_in_mod}
+
+SS_write(inputs_lf, dir = update_lf_mod, overwrite = TRUE)
+
+##CHECK MANUALLY
+
+```
+
+### Run model - new LF data
+
+```{r run_new_lf model, eval=FALSE}
+
+r4ss::run(dir = update_lf_mod,
+          exe = paste0(update_lf_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_lf_console_output.txt",
+          # extras = "-nohess
+          extras = "-nohess, -maxfn 5000",
+          verbose = TRUE)
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics.
+
+```{r diagnostic_lf_update, eval=FALSE}
+
+replist_lf <- SS_output(update_lf_mod)
+
+print(replist_lf$SBzero)
+# [1] 1863360
+print(replist_lf$current_depletion)
+# [1] 0.3226934
+
+SS_plots(replist_lf, minbthresh = 0.20)
+
+```
+
+
+## Filtered length-frequency data
+
+```{r update_lfdata2}
+update_lf_mod <- paste0(PATH_MODELRUNS, "2_update_lf2",sep="") #new model directory
+copy_SS_inputs(dir.old = update_catch_mod, dir.new = update_lf_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+inputs_lf <- SS_read(dir = update_lf_mod)
+max(inputs_lf$dat$lencomp$year)
+
+lf <- inputs_lf$dat$lencomp
+
+new_lf <- read.csv(file = paste0(PATH_SS3_INPUT,"SS3LFinput2.csv",sep="")) ## add in the new LF data
+max(new_lf$Year)
+
+new_lf <- new_lf %>% select(-X)
+names(new_lf) <- names(lf)
+inputs_lf$dat$lencomp <- new_lf ## replace data
+
+```
+
+### Update model with new lf
+
+```{r update_new_lf2_in_mod}
+
+SS_write(inputs_lf, dir = update_lf_mod, overwrite = TRUE)
+
+##CHECK MANUALLY
+
+```
+
+### Run model - new LF data
+
+```{r run_new_lf2 model, eval=FALSE}
+
+r4ss::run(dir = update_lf_mod,
+          exe = paste0(update_lf_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_lf_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics.
+
+```{r diagnostic_lf_update2, eval=FALSE}
+
+replist_lf <- SS_output(update_lf_mod)
+
+SS_plots(replist_lf, minbthresh = 0.20)
+
+
+
+```
+
+## Update model with filtered LF data - extended to 2026
+
+```{r update_lfdata3}
+update_lf_mod <- paste0(PATH_MODELRUNS, "2_update_lf3",sep="") #new model directory
+copy_SS_inputs(dir.old = update_catch_mod, dir.new = update_lf_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+inputs_lf <- SS_read(dir = update_lf_mod)
+max(inputs_lf$dat$lencomp$year)
+
+lf <- inputs_lf$dat$lencomp
+
+new_lf <- read.csv(file = paste0(PATH_SS3_INPUT,"SS3LFinput_2026.csv",sep="")) ## add in the new LF data
+max(new_lf$Year)
+
+new_lf <- new_lf %>% select(-X)
+names(new_lf) <- names(lf)
+inputs_lf$dat$lencomp <- new_lf ## replace data
+
+```
+
+### Update model with new lf
+
+```{r update_new_lf3_in_mod}
+
+SS_write(inputs_lf, dir = update_lf_mod, overwrite = TRUE)
+
+##CHECK MANUALLY
+
+```
+
+### Run model - new LF data
+
+```{r run_new_lf model3, eval=FALSE}
+
+r4ss::run(dir = update_lf_mod,
+          exe = paste0(update_lf_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_lf_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics.
+
+```{r diagnostic_lf3_update, eval=FALSE}
+
+replist_lf <- SS_output(update_lf_mod)
+print(replist_lf$SBzero)
+# [1] 1863360
+print(replist_lf$current_depletion)
+# [1] 0.2913579
+SS_plots(replist_lf, minbthresh = 0.20)
+
+```
+
+## Update CPUE [DONE 01-09-26]
+
+Update CPUE with new indices:
+
+* Fleet 8 = PL c.v. 0.1 = weight 1
+* Fleet 9 = PSLS long c.v. 0.1 = weight 1
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+```{r update_CPUE}
+update_cpue_mod <- paste0(PATH_MODELRUNS, "3_update_cpue",sep="") #new model directory
+copy_SS_inputs(dir.old = update_lf_mod, dir.new = update_cpue_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+inputs_cpue <- SS_read(dir = update_cpue_mod)
+cpue <- inputs_cpue$dat$CPUE
+max(cpue$year)
+print(inputs_cpue$dat$CPUEinfo)
+
+ctl <- inputs_cpue$ctl
+
+## ADD NEW CPUE DATA
+dat <- inputs_cpue$dat
+
+dat$Nfleets # 11
+dat$fleetnames[11] <- c("ABBI")
+
+
+allCPUE <- read.csv(file = paste0(PATH_SS3_INPUT,"SS3_CPUE_2026.csv",sep="")) ## add in the new CPUE data
+max(allCPUE$quarter) ## check number of quarters
+min(allCPUE$quarter) ## check min number of quarters
+max(allCPUE$fleet) ## check number of fleets
+allCPUE <- allCPUE %>% select(-X)
+
+names(allCPUE) <- names(dat$CPUE)
+dat$CPUE <- allCPUE ## replace data
+
+## Write out
+
+inputs_cpue$dat <- dat
+
+```
+
+### Output new CPUE to dat file
+
+```{r output_new_CPUE}
+
+SS_write(inputs_cpue, dir = update_cpue_mod, overwrite = TRUE)
+
+##MANUALLY CHECK TO BE SURE
+
+```
+
+### Run model - new CPUE
+
+```{r run_new_cpue model, eval=FALSE}
+
+r4ss::run(dir = update_cpue_mod,
+          exe = paste0(update_cpue_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_cpue_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics. Can run full KOBE plot etc. later, when happy with the final 'base' model to run the grid from.
+
+```{r diagnostic_cpue_update, eval=FALSE}
+
+replist_cpue <- SS_output(update_cpue_mod)
+
+print(replist_cpue$SBzero)
+# [1] 1861880
+print(replist_cpue$current_depletion)
+# [1] 0.5917889
+SS_plots(replist_cpue, minbthresh = 0.20)
+
+```
+
+## Update L50 to 39.9 cm [DONE 04-09-26]
+
+Update L50 to 39.9 cm.
+
+```{r update_L50}
+
+update_L50_mod <- paste0(PATH_MODELRUNS, "4_update_L50",sep="") #new model directory
+
+copy_SS_inputs(dir.old = update_cpue_mod, dir.new = update_L50_mod, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+inputs_L50 <- SS_read(dir = update_L50_mod)
+
+ctl <- inputs_L50$ctl
+dat <- inputs_L50$dat
+
+ctl$MG_parms[14,] <- c(1,60,39.9,39.9,100,6,-1,0,0,0,0,0.5,0,0)
+
+inputs_L50$ctl <- ctl
+
+```
+
+### Update model with new L50
+
+```{r update_new_L50_in_mod}
+
+SS_write(inputs_L50, dir = update_L50_mod, overwrite = TRUE)
+
+```
+
+### Run model - new L50 data
+
+```{r run_new_growth model, eval=FALSE}
+
+r4ss::run(dir = update_L50_mod,
+          exe = paste0(update_L50_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "new_L50_console_output.txt",
+          extras = "-maxfn 20000",
+          verbose = TRUE)
+
+```
+
+### Run diagnostics (basic r4ss code)
+
+Run this to check diagnostics.
+
+```{r diagnostic_growth_update, eval=FALSE}
+
+replist_L50 <- SS_output(update_L50_mod)
+
+replist_L50$SBzero
+# [1] 1828630
+replist_L50$current_depletion
+# [1] 0.5849297
+replist_L50$likelihoods_used[1, 1]
+
+SS_plots(replist_L50, minbthresh = 0.20)
+
+rec_dev <- replist_L50$parameters[grepl("Main_RecrDev_[0-9]{4}$", replist_L50$parameters$Label),]
+rec_dev$Yr <- as.numeric(sub(".*_([0-9]{4})$", "\\1", rec_dev$Label))
+
+rec_dev <- rec_dev %>% select(Label, Yr, Value)
+
+write.csv(rec_dev, file=paste0(PATH_DIAGNOSTICS,"rec_devs_base_model_MARSAC_18-09-26.csv"))
+
+base_mod <- paste0(PATH_MODELRUNS, "4_update_L50", sep="")
+
+```
+
+Base case:
+
+1) 4_update_L50
+
+#  {.unnumbered}
+
+# Sensitivities {.tabset}
+
+## CPUE indices - check impact of individual indices
+
+a)
+* Fleet 8 = PL c.v. 0.1 = weight 1
+* Fleet 9 = PSLS long c.v. 0.1 = weight 0
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+b) 
+* Fleet 8 = PL c.v. 0.1 = weight 0
+* Fleet 9 = PSLS long c.v. 0.1 = weight 1
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+c) 
+* Fleet 8 = PL c.v. 0.1 = weight 0
+* Fleet 9 = PSLS long c.v. 0.1 = weight 0
+* Fleet 10 = BAI c.v. 0.2 = weight 1
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+d)  
+* Fleet 8 = PL c.v. 0.1 = weight 0
+* Fleet 9 = PSLS long c.v. 0.1 = weight 0
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 1
+
+e) 
+* Fleet 8 = PL c.v. 0.1 = weight 1
+* Fleet 9 = PSLS long c.v. 0.1 = weight 1
+* Fleet 10 = BAI c.v. 0.2 = weight 1
+* Fleet 11 = ABBI c.v. 0.1 = weight 1
+
+f) 
+* Fleet 8 = PL c.v. 0.1 = weight 1
+* Fleet 9 = PSLS long c.v. 0.1 = weight 0
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 1
+
+g) 
+* Fleet 8 = PL c.v. 0.1 = weight 0
+* Fleet 9 = PSLS long c.v. 0.1 = weight 1
+* Fleet 10 = BAI c.v. 0.2 = weight 1
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+h) 
+* Fleet 8 = PL c.v. 0.1 = weight 1 - 1.25 % discount
+* Fleet 9 = PSLS long c.v. 0.1 = weight 0
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+i) 
+* Fleet 8 = PL c.v. 0.1 = weight 0  - 1.25 % discount
+* Fleet 9 = PSLS long c.v. 0.1 = weight 1
+* Fleet 10 = BAI c.v. 0.2 = weight 0
+* Fleet 11 = ABBI c.v. 0.1 = weight 0
+
+```{r cpue_indices_impact}
+
+base_mod <- paste0(PATH_MODELRUNS, "4_update_L50", sep="")
+
+update_cpue_mod_a <- paste0(PATH_SENSITIVITES, "s1a_MDV_cpue",sep="") #new model directory
+update_cpue_mod_b <- paste0(PATH_SENSITIVITES, "s1b_PSLS_cpue",sep="") #new model directory
+update_cpue_mod_c <- paste0(PATH_SENSITIVITES, "s1c_BAI_cpue",sep="") #new model directory
+update_cpue_mod_d <- paste0(PATH_SENSITIVITES, "s1d_ABBI_cpue",sep="") #new model directory
+update_cpue_mod_e <- paste0(PATH_SENSITIVITES, "s1e_all_cpue",sep="") #new model directory
+update_cpue_mod_f <- paste0(PATH_SENSITIVITES, "s1f_PL_ABBI_cpue",sep="")
+update_cpue_mod_g <- paste0(PATH_SENSITIVITES, "s1g_PSLS_BAI_cpue",sep="")
+
+update_cpue_mod_h <- paste0(PATH_SENSITIVITES, "s1h_PL_q1_cpue",sep="")
+update_cpue_mod_i <- paste0(PATH_SENSITIVITES, "s1i_PSLS_q1_cpue",sep="")
+
+
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_a, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_b, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_c, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_d, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_e, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_f, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_g, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_h, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+copy_SS_inputs(dir.old = base_mod, dir.new = update_cpue_mod_i, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+
+inputs_a <- SS_read(dir = update_cpue_mod_a)
+inputs_b <- SS_read(dir = update_cpue_mod_b)
+inputs_c <- SS_read(dir = update_cpue_mod_c)
+inputs_d <- SS_read(dir = update_cpue_mod_d)
+inputs_e <- SS_read(dir = update_cpue_mod_e)
+inputs_f <- SS_read(dir = update_cpue_mod_f)
+inputs_g <- SS_read(dir = update_cpue_mod_g)
+inputs_h <- SS_read(dir = update_cpue_mod_h)
+inputs_i <- SS_read(dir = update_cpue_mod_i)
+
+
+
+lambda_a <- inputs_a$ctl$lambdas
+lambda_a[2,4] <- 0
+lambda_b <- inputs_b$ctl$lambdas
+lambda_b[1,4] <- 0
+lambda_c <- inputs_c$ctl$lambdas
+lambda_c[1,4] <- 0
+lambda_c[2,4] <- 0
+lambda_c[3,4] <- 1
+lambda_d <- inputs_d$ctl$lambdas
+lambda_d[1,4] <- 0
+lambda_d[2,4] <- 0
+lambda_d[3,4] <- 0
+lambda_d[4,4] <- 1
+lambda_e <- inputs_e$ctl$lambdas
+lambda_e[,4] <- 1
+lambda_f <- inputs_f$ctl$lambdas
+lambda_f[1,4] <- 1
+lambda_f[2,4] <- 0
+lambda_f[3,4] <- 0
+lambda_f[4,4] <- 1
+lambda_g <- inputs_g$ctl$lambdas
+lambda_g[1,4] <- 0
+lambda_g[2,4] <- 1
+lambda_g[3,4] <- 1
+lambda_g[4,4] <- 0
+lambda_h <- inputs_h$ctl$lambdas
+lambda_h[2,4] <- 0
+lambda_i <- inputs_i$ctl$lambdas
+lambda_i[1,4] <- 0
+
+inputs_a$ctl$lambdas <- lambda_a
+inputs_b$ctl$lambdas <- lambda_b
+inputs_c$ctl$lambdas <- lambda_c
+inputs_d$ctl$lambdas <- lambda_d
+inputs_e$ctl$lambdas <- lambda_e
+inputs_f$ctl$lambdas <- lambda_f
+inputs_g$ctl$lambdas <- lambda_g
+inputs_h$ctl$lambdas <- lambda_h
+inputs_i$ctl$lambdas <- lambda_i
+
+
+cpue_h <- inputs_h$dat$CPUE
+cpue_i <- inputs_i$dat$CPUE
+
+
+cpue_h <- cpue_h %>%
+  group_by(index) %>%
+  mutate(
+    start_year = min(year, na.rm = TRUE),
+    reduction_factor = (1 - 0.0125)^(year - start_year),
+    obs_adj = if_else(
+      index %in% c(8, 9),
+      obs * reduction_factor,
+      obs
+    )
+  ) %>%
+  ungroup() %>%
+  select(year,month,index,obs, obs_adj, se_log)
+
+cpue_i <- cpue_i %>%
+  group_by(index) %>%
+  mutate(
+    start_year = min(year, na.rm = TRUE),
+    reduction_factor = (1 - 0.0125)^(year - start_year),
+    obs_adj = if_else(
+      index %in% c(8, 9),
+      obs * reduction_factor,
+      obs
+    )
+  ) %>%
+  ungroup() %>%
+  select(year,month,index,obs, obs_adj, se_log)
+
+cpue_h <- as.data.frame(cpue_h)
+cpue_i <- as.data.frame(cpue_i)
+
+cpue_h <- cpue_h %>% select(year,month,index,obs_adj, se_log)
+cpue_i <- cpue_i %>% select(year,month,index,obs_adj, se_log)
+
+inputs_h$dat$CPUE <- cpue_h
+inputs_i$dat$CPUE <- cpue_i
+
+
+SS_write(inputs_h, dir=update_cpue_mod_h, overwrite = TRUE)
+SS_write(inputs_i, dir=update_cpue_mod_i, overwrite = TRUE)
+
+
+SS_write(inputs_a, dir = update_cpue_mod_a, overwrite = TRUE)
+SS_write(inputs_b, dir = update_cpue_mod_b, overwrite = TRUE)
+SS_write(inputs_c, dir = update_cpue_mod_c, overwrite = TRUE)
+SS_write(inputs_d, dir = update_cpue_mod_d, overwrite = TRUE)
+SS_write(inputs_e, dir = update_cpue_mod_e, overwrite = TRUE)
+SS_write(inputs_f, dir = update_cpue_mod_f, overwrite = TRUE)
+SS_write(inputs_g, dir = update_cpue_mod_g, overwrite = TRUE)
+
+
+```
+
+### Run cpue models
+
+```{r run_cpue_models, eval=FALSE}
+
+r4ss::run(dir = update_cpue_mod_a,
+          exe = paste0(update_cpue_mod_a, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_a_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_b,
+          exe = paste0(update_cpue_mod_b, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_b_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_c,
+          exe = paste0(update_cpue_mod_c, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_c_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_d,
+          exe = paste0(update_cpue_mod_d, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_d_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_e,
+          exe = paste0(update_cpue_mod_e, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_e_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_f,
+          exe = paste0(update_cpue_mod_f, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_f_console_output.txt",
+          extras = "-maxfn 5000 -nohess",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_g,
+          exe = paste0(update_cpue_mod_g, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_g_console_output.txt",
+          extras = "-maxfn 5000 -nohess",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_h,
+          exe = paste0(update_cpue_mod_h, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_h_console_output.txt",
+          extras = "-maxfn 5000 -nohess",
+          verbose = TRUE)
+
+r4ss::run(dir = update_cpue_mod_i,
+          exe = paste0(update_cpue_mod_i, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_cpue_mod_i_console_output.txt",
+          extras = "-maxfn 5000 -nohess",
+          verbose = TRUE)
+
+```
+
+
+### Run diagnostics
+
+```{r cpue_alternatives_diagnostics, eval=FALSE}
+
+replist_cpue_a <- SS_output(update_cpue_mod_a)
+print(replist_cpue_a$SBzero)
+#1750500
+print(replist_cpue_a$current_depletion)
+# 0.8145558
+SS_plots(replist_cpue_a, minbthresh = 0.20)
+
+
+replist_cpue_b <- SS_output(update_cpue_mod_b)
+print(replist_cpue_b$SBzero)
+#2101600
+print(replist_cpue_b$current_depletion)
+#0.4775219
+SS_plots(replist_cpue_b, minbthresh = 0.20)
+
+replist_cpue_c <- SS_output(update_cpue_mod_c)
+print(replist_cpue_c$SBzero)
+#2681930
+print(replist_cpue_c$current_depletion)
+#0.9423997
+SS_plots(replist_cpue_c, minbthresh = 0.20)
+
+replist_cpue_d <- SS_output(update_cpue_mod_d)
+print(replist_cpue_d$SBzero)
+#2386350
+print(replist_cpue_d$current_depletion)
+#0.4506296
+SS_plots(replist_cpue_d, minbthresh = 0.20)
+
+replist_cpue_e <- SS_output(update_cpue_mod_e)
+print(replist_cpue_e$SBzero)
+#1927550
+print(replist_cpue_e$current_depletion)
+#0.5747659
+SS_plots(replist_cpue_e, minbthresh = 0.20)
+
+replist_cpue_f <- SS_output(update_cpue_mod_f)
+print(replist_cpue_f$SBzero)
+#1756060
+print(replist_cpue_f$current_depletion)
+#0.760441
+SS_plots(replist_cpue_f, minbthresh = 0.20)
+
+replist_cpue_g <- SS_output(update_cpue_mod_g)
+print(replist_cpue_g$SBzero)
+#2078110
+print(replist_cpue_g$current_depletion)
+#0.4802888
+SS_plots(replist_cpue_g, minbthresh = 0.20)
+
+replist_cpue_h <- SS_output(update_cpue_mod_h)
+print(replist_cpue_h$SBzero)
+#1776410
+print(replist_cpue_h$current_depletion)
+#0.6808394
+SS_plots(replist_cpue_h, minbthresh = 0.20)
+
+replist_cpue_i <- SS_output(update_cpue_mod_i)
+print(replist_cpue_i$SBzero)
+#2228810
+print(replist_cpue_i$current_depletion)
+#0.3811882
+SS_plots(replist_cpue_i, minbthresh = 0.20)
+
+```
+
+## Update SOMALIA catch [Additional run just in case]
+
+```{r SOM_catch}
+
+update_som_mod <- paste0(PATH_MODELRUNS, "s2_som_catch", sep="")
+copy_SS_inputs(dir.old = base_mod, dir.new = update_som_mod, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = update_som_mod)
+catch <-inputs$dat$catch
+new_catch <- read.csv(file = paste0(PATH_SS3_INPUT,"SS3catch2026_no_somalia.csv",sep=""))
+
+new_catch <- new_catch %>% mutate(catch_se = 0.1) ## add generic CV of 0.1
+new_catch <- new_catch %>% select(-X)
+
+names(new_catch) <- names(catch)
+inputs$dat$catch <- new_catch
+SS_write(inputs, dir = update_som_mod, overwrite = TRUE)
+
+```
+
+```{r run_somalia_mod, eval=FALSE}
+
+r4ss::run(dir = update_som_mod,
+          exe = paste0(update_som_mod, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "update_bias_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)
+		  
+		  
+replist_catch_som <- SS_output("./s2_som_catch/")
+
+replist_catch_som$SBzero
+# [1] 1824480
+replist_catch_som$current_depletion
+# [1] 0.5847529
+SS_plots(replist_catch_som, minbthresh = 0.20)
+
+```
+
+## Estimate Linf
+
+```{r sensitivity_s3}
+sens_Linf_est <- paste0(PATH_SENSITIVITES, "s3_Linf_est", sep="")
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_Linf_est, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_Linf_est)
+
+inputs$ctl$MG_parms[7,7] <- 5 ## change Linf to be estimated in phase 5
+
+SS_write(inputs, dir = sens_Linf_est, overwrite = TRUE)
+
+```
+
+### run model and diagnostics
+
+```{r sensitivity_s3_mod, eval=FALSE}
+
+r4ss::run(dir = sens_Linf_est,
+          exe = paste0(sens_Linf_est, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_Linf_est_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE) ##DID NOT CONVERGE
+		  
+		  
+replist_Linf_est <- SS_output(sens_Linf_est)
+
+replist_Linf_est$SBzero
+# [1] 1929560
+replist_Linf_est$current_depletion
+# [1] 0.4816575
+SS_plots(replist_Linf_est, minbthresh = 0.20)
+
+```
+
+## Estimate Linf with bigger LL sample size 
+
+```{r sensitivity_s4b}
+sens_Linf_est_LL <- paste0(PATH_SENSITIVITES, "s4_Linf_est_LL", sep="")
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_Linf_est_LL, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_Linf_est_LL)
+
+inputs$ctl$MG_parms[7,7] <- 5 ## change Linf to be estimated in phase 5
+
+inputs$ctl$Variance_adjustment_list[6,3] <- 0.1 ## increase sample size for longline fishery
+
+SS_write(inputs, dir = sens_Linf_est_LL, overwrite = TRUE)
+
+```
+
+### run model and diagnostics
+
+```{r sensitivity_s4_mod, eval=FALSE}
+
+r4ss::run(dir = sens_Linf_est_LL,
+          exe = paste0(sens_Linf_est_LL, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_Linf_est_LL_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE) 
+		  
+		  
+replist_Linf_est_LL <- SS_output(sens_Linf_est_LL)
+
+replist_Linf_est_LL$SBzero
+# [1] 1969520
+
+replist_Linf_est_LL$current_depletion
+# [1] 0.4691275
+SS_plots(replist_Linf_est_LL, minbthresh = 0.20)
+
+```
+
+## Estimate Linf with 1.0 LL sample size and increase initial high value
+
+```{r sensitivity_s5}
+base_mod <- paste0(PATH_MODELRUNS, "4_update_L50", sep="")
+sens_Linf_est_LL2 <- paste0(PATH_SENSITIVITES, "s5_Linf_est_LL2", sep="")
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_Linf_est_LL2, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_Linf_est_LL2)
+
+inputs$ctl$MG_parms[7,7] <- 5 ## change Linf to be estimated in phase 5
+inputs$ctl$MG_parms[7,2] <- 120 ## increase initial high value
+
+inputs$ctl$Variance_adjustment_list[6,3] <- 1.0 ## increase sample size for longline fishery
+
+SS_write(inputs, dir = sens_Linf_est_LL2, overwrite = TRUE)
+
+```
+
+### run model and diagnostics
+
+```{r sensitivity_s4_modb, eval=FALSE}
+
+r4ss::run(dir = sens_Linf_est_LL2,
+          exe = paste0(sens_Linf_est_LL2, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_Linf_est_LL2_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE) 
+		  
+		  
+replist_Linf_est_LL2 <- SS_output(sens_Linf_est_LL2)
+
+replist_Linf_est_LL2$SBzero
+# [1] 2311500
+
+replist_Linf_est_LL2$current_depletion
+# [1] 0.3935423
+SS_plots(replist_Linf_est_LL2, minbthresh = 0.20)
+
+```
+
+## Set Linf to 95 cm (WCPFC)
+
+```{r sensitivity_s6}
+sens_Linf_95 <- paste0(PATH_SENSITIVITES, "s6_Linf_95", sep="")
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_Linf_95, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_Linf_95)
+
+inputs$ctl$MG_parms[7,1:5] <- c(50,120,95,95,100)
+
+SS_write(inputs, dir = sens_Linf_95, overwrite = TRUE)
+
+```
+
+### run model and diagnostics
+
+```{r sensitivity_s6_mod, eval=FALSE}
+
+r4ss::run(dir = sens_Linf_95,
+          exe = paste0(sens_Linf_95, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_Linf_95_console_output.txt",
+          extras = "-maxfn 5000",
+          verbose = TRUE)  ## DID NOT CONVERGE
+		  
+		  
+replist_Linf_95 <- SS_output(sens_Linf_95)
+
+replist_Linf_95$SBzero
+# [1] 2799260 -- 100
+# [1] 2580540 -- 95
+replist_Linf_95$current_depletion
+# [1] 0.3891278 -- 100
+# [1] 0.3977811 -- 95
+SS_plots(replist_Linf_95, minbthresh = 0.20)
+
+```
+
+## Natural mortality - Lorenzen
+Use age 5 as min age (represents 50 % maturity); 12 as max age - represents the oldest fish targetted by the longline fisheries.
+
+Prior = log-normal space = log(0.25) = -1.386294. Use prior option 3 (log-normal space), as recommended by Hamel and Cope (2022).
+
+M = 0.25 is the mean M from the base assessment.
+
+```{r natM_lorenzen}
+
+natM_lorenzen <- paste0(PATH_SENSITIVITES, "s7_natM_lorenzen",sep="") #new model directory
+copy_SS_inputs(dir.old = base_mod, dir.new = natM_lorenzen, create.dir = TRUE, overwrite=TRUE, copy_exe = TRUE)
+
+inputs_natM_lorenzen <- SS_read(dir= natM_lorenzen)
+
+ctl_natM <- inputs_natM_lorenzen$ctl
+
+ctl_natM$natM_type <- 6 # change to option 6
+ctl_natM$Lorenzen_minage <- 1
+ctl_natM$Lorenzen_maxage <- 7
+
+# ctl_natM$MG_parms[1,1:7] <- c(0.01,1,0.50,-0.22314,0.30,3,-3) ## Prior from Hamel & Cope (2022)
+# ctl_natM$MG_parms <- ctl_natM$MG_parms[-(2:5),] <-- WAS A BIT HIGH, LOLS
+
+ctl_natM$MG_parms[1,1:7] <- c(0.01,1,0.6750125,0.6750125,0.31,6,-3) ## Prior from Hamel & Cope (2022)
+ctl_natM$MG_parms <- ctl_natM$MG_parms[-(2:5),]
+
+
+inputs_natM_lorenzen$ctl <- ctl_natM
+
+SS_write(inputs_natM_lorenzen, dir = natM_lorenzen, overwrite = TRUE)
+
+```
+
+### Run model - Lorenzen M
+
+```{r run_lorenzen, eval=FALSE}
+
+r4ss::run(dir = natM_lorenzen,
+          exe = paste0(natM_lorenzen, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "natM_lorenzen_console_output.txt",
+          extras = "-maxfn 5000 -nohess",
+          # extras = "-nohess",
+          verbose = TRUE)
+```
+
+```{r run_diagnostic_natMlorenzen, eval=FALSE}
+replist_natM_lorenzen <- SS_output(natM_lorenzen)
+
+replist_natM_lorenzen$SBzero
+# [1] 1786780 -- 0.8
+# 2674650 -- 0.6
+# 1846560 -- A max 7
+# 2003730 -- A max 8
+replist_natM_lorenzen$current_depletion
+# [1] 0.5985404 -- 0.8
+# 0.3989382 -- 0.6
+# 0.5578102 -- a max 7
+# 0.516372
+SS_plots(replist_natM_lorenzen, minbthresh = 0.20)
+
+```
+
+## Change model period
+
+Test if running the model only in the model time period affects the results or not.
+
+Exploited equilibrium state in 1983.
+
+```{r sens_mod_time}
+
+sens_mod_time <- paste0(PATH_SENSITIVITES, "s8_mod_time", sep="") ## new model directory
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_mod_time, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_mod_time)
+
+inputs$dat$styr <- 1983
+
+catch <- inputs$dat$catch
+
+catch <- catch %>%
+  filter(year >= 1982) %>%
+  mutate(year = if_else(year == 1982 & seas == 1, -999, year)) %>%
+  filter(year != 1982)
+
+initF <- catch %>% filter(year == -999)
+print(initF)
+
+catch_1982 <- initF$catch
+
+F_ballpark <- inputs$ctl$F_ballpark
+scale_factor <- F_ballpark * 0.5
+initial_F <- round(scale_factor * catch_1982 / max(catch_1982), 4)
+
+inputs$dat$catch <- catch
+inputs$dat$CPUE <- inputs$dat$CPUE[inputs$dat$CPUE[,1] >= 1982, ]
+
+inputs$ctl$Block_Design[[1]] <- c(1983,1988,1989,1993,1994,1998,1999,2003,2004,2009)
+inputs$ctl$Block_Design[[2]] <- c(1983,1984,1985,1986, 1987, 1992, 1993, 2000, 2001, 2009)
+inputs$ctl$Block_Design[[3]] <- c(1983,1983)
+
+
+init_F <- data.frame(
+  LO      = rep(0, 7),
+  HI      = rep(1, 7),
+  INIT    = initial_F,
+  PRIOR   = rep(0.1, 7),
+  PR_SD   = rep(99, 7),   # weak/uninformative prior
+  PR_type = rep(6, 7),    # lognormal
+  PHASE   = rep(2, 7)
+)
+
+rownames(init_F) <- c(
+  "InitF_seas_1_flt_1PL",
+  "InitF_seas_1_flt_2PSLS",
+  "InitF_seas_1_flt_3PSFS",
+  "InitF_seas_1_flt_4GL",
+  "InitF_seas_1_flt_5LI",
+  "InitF_seas_1_flt_6LL",
+  "InitF_seas_1_flt_7Other"
+)
+
+inputs$ctl$init_F <- init_F
+
+inputs$fore$Bmark_years[7] <- 1983
+inputs$fore$Bmark_years[9] <- 1983
+
+
+SS_write(inputs, dir = sens_mod_time, overwrite = TRUE)
+
+### need to add timevary MG parameters manually.
+
+
+```
+
+```{r run_time_mod, eval=FALSE}
+r4ss::run(dir = sens_mod_time,
+          exe = paste0(sens_mod_time, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_mod_time_console_output.txt",
+           extras = "-nohess -maxfn 5000", ##second running do this
+          verbose = TRUE)
+		  
+		  
+replist_time <- SS_output(sens_mod_time)
+
+replist_time$SBzero
+#1815510
+replist_time$current_depletion
+# 0.5676642
+SS_plots(replist_time, minbthresh = 0.20)
+
+```
+
+## Catchability - 1.25 % annual increase in catchability
+
+```{r catchability}
+
+sens_catchability <- paste0(PATH_SENSITIVITES, "s9_catchability", sep="") ## new model directory
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_catchability, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_catchability)
+
+cpue <- inputs$dat$CPUE
+
+cpue <- cpue %>%
+  group_by(index) %>%
+  mutate(
+    start_year = min(year, na.rm = TRUE),
+    reduction_factor = (1 - 0.0125)^(year - start_year),
+    obs_adj = if_else(
+      index %in% c(8, 9),
+      obs * reduction_factor,
+      obs
+    )
+  ) %>%
+  ungroup() %>%
+  select(year,month,index,obs, obs_adj, se_log)
+
+cpue <- as.data.frame(cpue)
+cpue <- cpue %>% select(year,month,index,obs_adj, se_log)
+inputs$dat$CPUE <- cpue
+
+SS_write(inputs, dir=sens_catchability, overwrite = TRUE)
+
+fleets <- unique(cpue$index)
+
+par(mfrow = c(ceiling(length(fleets) / 2), 2))
+
+for (f in fleets) {
+  d <- cpue[cpue$index == f, ]
+  yrs <- (d$year) + (d$month / 12)
+  
+  plot(yrs, d$obs, type = "l", col = "black",
+       xlab = "Year", ylab = "Index",
+       main = f,
+       ylim = range(c(d$obs, d$obs_adj), na.rm = TRUE))
+  lines(yrs, d$obs_adj, col = "red")
+}
+
+legend("topright", legend = c("obs", "obs_q"), col = c("black", "red"), lty = 1, cex = 0.8)
+
+
+
+```
+
+### run catchability model
+
+```{r run_q, eval=FALSE}
+
+r4ss::run(dir = sens_catchability,
+          exe = paste0(sens_catchability, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_catchability_console_output.txt",
+           extras = "-nohess -maxfn 5000", ##second running do this
+          verbose = TRUE)
+	  
+replist_q <- SS_output(sens_catchability)
+
+replist_q$SBzero
+#2021670
+replist_q$current_depletion
+# 0.5037321
+SS_plots(replist_q, minbthresh = 0.20)
+
+```
+
+## Two area model - "east" and "west"
+
+1) Area 1 = PL + GL + LI + LL + Other (PL CPUE)
+2) Area 2 = PSLS + PSFS (PSLS, BAI, Behav CPUE) <-- only PSLS CPUE used.
+
+THIS CODE DOESN"T WORK SO I MANUALLY EDITED
+
+```{r sens_two_area}
+
+sens_two_area <- paste0(PATH_SENSITIVITES, "s10_two_area", sep="") ## new model directory
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_two_area, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_two_area)
+
+inputs$dat$N_areas <- 2
+
+inputs$dat$fleetinfo$area[2:3] <- 2
+inputs$dat$fleetinfo$area[9:11] <- 2
+inputs$dat$fleetinfo1[2,2:3] <- 2
+inputs$dat$fleetinfo1[2,9:11] <-2
+
+inputs$dat$tag_releases$area <- 2
+
+inputs$ctl$recr_dist_read <- 8
+inputs$ctl$recr_dist_pattern[5,1:4] <- c(1,1,2,0)
+inputs$ctl$recr_dist_pattern[6,1:4] <- c(1,4,2,0)
+inputs$ctl$recr_dist_pattern[7,1:4] <- c(1,7,2,0)
+inputs$ctl$recr_dist_pattern[8,1:4] <- c(1,10,2,0)
+
+inputs$ctl$N_moveDef <- 8
+inputs$ctl$firstAgeMove <- 2
+inputs$ctl$moveDef <- matrix(c(
+  1, 1, 1, 2, 2, 8,
+  1, 1, 2, 1, 2, 8,
+  2, 1, 1, 2, 2, 8,
+  2, 1, 2, 1, 2, 8,
+  3, 1, 1, 2, 2, 8,
+  3, 1, 2, 1, 2, 8,
+  4, 1, 1, 2, 2, 8,
+  4, 1, 2, 1, 2, 8
+), ncol = 6, byrow = TRUE)
+
+mg <- inputs$ctl$MG_parms
+k  <- which(rownames(mg) == "RecrDist_Area_1")
+
+new_row <- mg[k, , drop = FALSE]        # copy Area_1 as a template
+rownames(new_row) <- "RecrDist_Area_2"
+
+inputs$ctl$MG_parms <- rbind(mg[1:k, ],
+                      new_row,
+                      mg[(k + 1):nrow(mg), ])
+
+inputs$ctl$MG_parms["RecrDist_Area_2",] <- c(-4, 4, 0, 0, 0.1, 6, 5, 0, 1, 1983, 2024, 5, 0, 0)
+
+mg <- inputs$ctl$MG_parms
+k  <- which(rownames(mg) == "CohortGrowDev")
+
+new_names <- paste0("MoveParm_", rep(c("A", "B"), 8), "_seas_",
+                    rep(1:4, each = 4), "_GP_1from_",
+                    rep(c("1to_2", "1to_2", "2to_1", "2to_1"), 4))
+
+new_rows <- matrix(rep(c(-8, 9, 0, 0, 5, 6, 3, 0, 0, 0, 0, 0.5, 0, 0), 16),
+                   ncol = 14, byrow = TRUE)
+colnames(new_rows) <- colnames(mg)
+rownames(new_rows) <- new_names
+new_rows <- as.data.frame(new_rows)
+
+inputs$ctl$MG_parms <- rbind(mg[1:k, ],
+                      new_rows,
+                      mg[(k + 1):nrow(mg), ])
+
+
+tv <- inputs$ctl$MG_parms_tv
+
+new_tv <- matrix(c(
+   0.0001, 2,    0.3, 0.3, 0.5, 6, -5,
+  -0.99,   0.99, 0,   0,   0.5, 6, -6
+), ncol = 7, byrow = TRUE)
+
+colnames(new_tv) <- colnames(tv)
+rownames(new_tv) <- c("RecrDist_Area_2_dev_se",
+                      "RecrDist_Area_2_dev_autocorr")
+
+inputs$ctl$MG_parms_tv <- rbind(as.data.frame(new_tv), tv)
+
+SS_write(inputs, dir=sens_two_area, overwrite = TRUE)
+
+```
+
+```{r run_two_area, eval=FALSE}
+
+r4ss::run(dir = sens_two_area,
+          exe = paste0(sens_two_area, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_two_area_console_output.txt",
+           extras = "-maxfn 5000", ##second running do this
+          verbose = TRUE)
+	  
+replist_two_area <- SS_output(sens_two_area)
+
+replist_two_area$SBzero
+#2852141
+replist_two_area$current_depletion
+# 1.043368
+SS_plots(replist_two_area, minbthresh = 0.20)
+
+```
+
+## Sigma R
+
+```{r sigmaR}
+
+sens_sigR <- paste0(PATH_SENSITIVITES, "s10_sigmaR", sep="") ## new model directory
+copy_SS_inputs(dir.old = base_mod, dir.new = sens_sigR, create.dir = TRUE, overwrite = TRUE, copy_exe = TRUE)
+
+inputs <- SS_read(dir = sens_sigR)
+
+SR_params <- inputs$ctl$SR_parms
+
+SR_params[3,3:5] <- c(0.6,0.6,0.8)
+
+inputs$ctl$SR_parms <- SR_params
+
+SS_write(inputs, dir = sens_sigR, overwrite = TRUE)
+
+```
+
+```{r run_SigmaR, eval=FALSE}
+
+r4ss::run(dir = sens_sigR,
+          exe = paste0(sens_sigR, "/ss3_win.exe", sep=""),
+          skipfinished = FALSE,
+          show_in_console = TRUE,
+          console_output_file = "sens_sigR_console_output.txt",
+          extras = "-maxfn 5000 -nohess",
+          verbose = TRUE)
+
+replist_sens_sigR <- SS_output(sens_sigR)
+
+replist_sens_sigR$SBzero
+#2137970
+replist_sens_sigR$current_depletion
+# 0.5214807
+SS_plots(replist_sens_sigR, minbthresh = 0.20)
+
+```
+# {.unnumbered}
+
+# ASPM {.tabset}
+
+## ASPM
+
+Use the ss3diags package in R to set up the ASMP (age-structured production model) for the base case model [4_update_rec].
+
+MANUALLY CHANGE THE INPUT FILES.
+
+```{r ASPM}
+# remotes::install_github("nmfs-ost/ss3diags")
+library(ss3diags)
+library(r4ss)
+
+base_dir <- base_mod     # folder containing the finished base-model run
+                                    # (control.ss_new, data.ss_new, forecast.ss_new,
+                                    #  starter.ss_new, SS3fast_Win64.exe, SS3fast_Win64.par)
+root_aspm <- paste0(PATH_DIAGNOSTICS, "ASPM", sep="")
+aspm_dir <- paste0(PATH_DIAGNOSTICS, "ASPM/ASPM_base",sep="")     # new folder the ASPM will be built/run in
+aspm_rec_dir <- paste0(PATH_DIAGNOSTICS, "ASPM/ASPM_base_rec",sep="")  # second ASPM, with rec devs estimated
+exe_name <- "ss3_win.exe"    # SS3 executable
+run_exe  <- TRUE                   # set FALSE to just build the files without launching SS3
+ 
+## ---------------------------------------------------------------------------
+## STEP 1: create the ASPM folder, copy files, rename *_new / *.par
+## ---------------------------------------------------------------------------
+if (!dir.exists(aspm_dir)) dir.create(aspm_dir, recursive = TRUE)
+
+files_to_copy <- c("control.ss_new", "data_echo.ss_new", "forecast.ss_new",
+                    "starter.ss_new", exe_name, "ss3.par")
+ 
+for (f in files_to_copy) {
+  src <- file.path(base_dir, f)
+  if (!file.exists(src)) stop("Missing expected file in base_dir: ", f)
+  file.copy(src, file.path(aspm_dir, f), overwrite = TRUE)
+}
+ 
+# rename *.ss_new -> *.ss
+file.rename(file.path(aspm_dir, "control.ss_new"),  file.path(aspm_dir, "control.ss"))
+file.rename(file.path(aspm_dir, "data_echo.ss_new"),      file.path(aspm_dir, "data.ss"))
+file.rename(file.path(aspm_dir, "forecast.ss_new"),  file.path(aspm_dir, "forecast.ss"))
+file.rename(file.path(aspm_dir, "starter.ss_new"),   file.path(aspm_dir, "starter.ss"))
+
+# ---------------------------------------------------------------------------
+## STEP 2: zero out all recruitment deviations in SS3.par
+## ---------------------------------------------------------------------------
+parfile <- file.path(aspm_dir, "SS3.par")
+ 
+par <- SS_readpar_3.30(
+  parfile   = parfile,
+  datsource = file.path(aspm_dir, "data.ss"),
+  ctlsource = file.path(aspm_dir, "control.ss"),
+  verbose   = FALSE
+)
+ 
+# helper: zero every numeric value in a par element, keeping any year/index
+# column (if present) untouched
+zero_devs <- function(x) {
+  if (is.null(x)) return(x)
+  if (is.data.frame(x)) {
+    keep <- names(x) %in% c("year", "Year", "index", "Index", "yr")
+    num_cols <- sapply(x, is.numeric) & !keep
+    x[, num_cols] <- 0
+  } else if (is.numeric(x)) {
+    x[] <- 0
+  }
+  x
+}
+ 
+par$recdev_early       <- zero_devs(par$recdev_early)
+par$recdev1            <- zero_devs(par$recdev1)
+par$Fcast_recruitments <- zero_devs(par$Fcast_recruitments)
+ 
+SS_writepar_3.30(par, outfile = parfile, overwrite = TRUE)
+ 
+message("Step 2 complete: rec devs zeroed in SS3.par")
+ 
+## ---------------------------------------------------------------------------
+## STEP 3: starter.ss -> initialize parameters from SS3.par
+## ---------------------------------------------------------------------------
+starter <- SS_readstarter(file.path(aspm_dir, "starter.ss"), verbose = FALSE)
+starter$init_values_src <- 1   # 0 = use control-file inits; 1 = use SS3.par
+SS_writestarter(starter, dir = aspm_dir, file = "starter.ss",
+                 overwrite = TRUE, verbose = FALSE)
+ 
+message("Step 3 complete: starter.ss set to read from SS3.par")
+ 
+## ---------------------------------------------------------------------------
+## Read control.ss once -- steps 4, 6, 7 all edit this object, then it is
+## written out a single time at the end (see STEP 7)
+## ---------------------------------------------------------------------------
+ctl <- SS_readctl(
+  file.path(aspm_dir, "control.ss"),
+  use_datlist = TRUE,
+  datlist     = file.path(aspm_dir, "data.ss"),
+  verbose     = FALSE
+)
+ 
+## ---------------------------------------------------------------------------
+## STEP 4: fix all selectivity parameters at their SS3.par values
+## (negative phase => not estimated, just read/held fixed)
+## ---------------------------------------------------------------------------
+fix_phase <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(df)
+  if ("PHASE" %in% names(df)) df$PHASE <- -abs(df$PHASE)
+  df
+}
+ 
+# NOTE: block names below are the standard r4ss 3.30 control-list names.
+# Check names(ctl) for your model -- not every block will be present
+# (e.g. no time-varying or Dirichlet-multinomial blocks), and some models
+# use age_selex_parms / size_selex_parms only.
+selex_blocks <- c("size_selex_parms", "size_selex_parms_tv",
+                   "age_selex_parms",  "age_selex_parms_tv")
+ 
+for (b in selex_blocks) {
+  if (!is.null(ctl[[b]])) ctl[[b]] <- fix_phase(ctl[[b]])
+}
+ 
+message("Step 4 complete: selectivity parameter phases set negative")
+ 
+## ---------------------------------------------------------------------------
+## STEP 5: turn off fit to all length-composition data (lambda = 0)
+## component 4 = length comps; applied to every fleet with length data
+## ---------------------------------------------------------------------------
+set_lambda <- function(ctl, component, fleets, phase = 1, value = 0,
+                        sizefreq_method = 1) {
+  L <- ctl$lambdas
+  if (is.null(L)) {
+    L <- data.frame(like_comp = integer(), fleet = integer(),
+                     phase = integer(), value = numeric(),
+                     sizefreq_method = integer())
+  }
+  # r4ss has used slightly different column names across versions --
+  # detect whichever one holds the likelihood-component code
+  comp_col <- intersect(c("like_comp", "component"), names(L))[1]
+  if (is.na(comp_col)) comp_col <- names(L)[1]
+ 
+  for (f in fleets) {
+    hit <- which(L[[comp_col]] == component & L$fleet == f)
+    if (length(hit) > 0) {
+      L$value[hit] <- value
+      L$phase[hit] <- phase
+    } else {
+      newrow <- setNames(
+        data.frame(component, f, phase, value, sizefreq_method),
+        names(L)
+      )
+      L <- rbind(L, newrow)
+    }
+  }
+  ctl$lambdas <- L
+  ctl$N_lambdas <- nrow(L)
+  ctl
+}
+ 
+n_fleets <- ctl$Nfleet   # number of fleets in the model (check name if this errors)
+ctl <- set_lambda(ctl, component = 4, fleets = 1:n_fleets,
+                   phase = 1, value = 0, sizefreq_method = 1)
+ 
+message("Step 5 complete: length-comp lambdas set to 0 for fleets 1:", n_fleets)
+ 
+## ---------------------------------------------------------------------------
+## STEP 6: fix rec devs at their (now-zero) SS3.par values
+## ---------------------------------------------------------------------------
+recdev_phase_orig       <- ctl$recdev_phase
+recdev_early_phase_orig <- ctl$recdev_early_phase
+ 
+ctl$recdev_phase       <- -abs(ctl$recdev_phase)
+ctl$recdev_early_phase <- -abs(ctl$recdev_early_phase)
+ 
+message("Step 6 complete: recdev phases set negative")
+ 
+## ---------------------------------------------------------------------------
+## STEP 7: turn off the recruitment-deviation penalty in the likelihood
+## component 10 = recruitment deviations
+## ---------------------------------------------------------------------------
+ctl <- set_lambda(ctl, component = 10, fleets = 1,
+                   phase = 1, value = 0, sizefreq_method = 1)
+ 
+# write the fully-edited control file once
+SS_writectl(ctl, outfile = file.path(aspm_dir, "control.ss"),
+            overwrite = TRUE, verbose = FALSE)
+ 
+message("Step 7 complete: recruitment-deviation lambda set to 0; control.ss written")
+
+if (!dir.exists(aspm_rec_dir)) dir.create(aspm_rec_dir, recursive = TRUE)
+ 
+# start from the already-built ASPM folder (selectivity fixed, length
+# comps off, starter reading from SS3.par) and copy it wholesale
+aspm_files <- list.files(aspm_dir, full.names = FALSE)
+for (f in aspm_files) {
+  file.copy(file.path(aspm_dir, f), file.path(aspm_rec_dir, f), overwrite = TRUE)
+}
+ 
+# re-read the copied control file and switch rec devs back on
+ctl2 <- SS_readctl(
+  file.path(aspm_rec_dir, "control.ss"),
+  use_datlist = TRUE,
+  datlist     = file.path(aspm_rec_dir, "data.ss"),
+  verbose     = FALSE
+)
+ 
+# restore the original (positive) recdev phases so they are estimated
+ctl2$recdev_phase       <- recdev_phase_orig
+ctl2$recdev_early_phase <- recdev_early_phase_orig
+ 
+# turn the recruitment-deviation likelihood penalty back on (component 10)
+ctl2 <- set_lambda(ctl2, component = 10, fleets = 1,
+                    phase = 1, value = 1, sizefreq_method = 1)
+ 
+SS_writectl(ctl2, outfile = file.path(aspm_rec_dir, "control.ss"),
+            overwrite = TRUE, verbose = FALSE)
+
+```
+
+### Run ASPM models
+
+```{r run_ASPM_models, eval=TRUE}
+
+if (run_exe) {
+  message("Running ASPM...")
+  r4ss::run(dir = aspm_dir, exe = exe_name, skipfinished = FALSE,
+            show_in_console = TRUE)
+  
+  message("Running ASPM with rec devs estimated...")
+  r4ss::run(dir = aspm_rec_dir, exe = exe_name, skipfinished = FALSE,
+            show_in_console = TRUE)
+ 
+  ## Optional: quick comparison plot of base model vs. ASPM
+  base_out <- SS_output(dir = base_dir, verbose = FALSE, printstats = FALSE)
+  aspm_out <- SS_output(dir = aspm_dir, verbose = FALSE, printstats = FALSE)
+  aspm_rec_out <- SS_output(dir = aspm_rec_dir, verbose = FALSE, printstats = FALSE)
+
+ 
+  sumry <- SSsummarize(list(base_out, aspm_out, aspm_rec_out))
+  SSplotComparisons(sumry, legendlabels = c("Base model", "ASPM", "ASPM_rec"),
+                     plotdir = aspm_dir, print = TRUE)
+ 
+  message("Step 8 complete: all models run; comparison plots saved to ", aspm_dir)
+}
+
+```
+
+### Plot ASPM models
+
+```{r plot_ASPM, eval=TRUE}
+#
+# Step 9) summarize results in R using the r4ss package 
+library(r4ss)
+# directories where models were run need to be defined
+root.dir <- root_aspm
+ss3_base_dir <- base_dir
+ASPM_base_dir <- aspm_dir
+ASPM_base_rec_dir <- aspm_rec_dir
+
+# read models
+ss3_base <- SS_output(dir=mod_path)
+ASPM_base <- SS_output(dir=ASPM_base_dir)
+ASPM_base_rec <- SS_output(dir=ASPM_base_rec_dir)
+
+# create list summarizing model results
+mod.sum <- SSsummarize(list(ss3_base, ASPM_base, ASPM_base_rec))
+
+# plot comparisons
+SSplotComparisons(mod.sum, legendlabels=c("SS3 (4_update_L50)", "ASPMFixed", "ASPMrec"),print = T, plotdir = paste0(root.dir,"/plots"))
+
+```
+

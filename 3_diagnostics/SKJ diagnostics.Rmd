@@ -1,0 +1,185 @@
+---
+title: "Diagnostics"
+author: "Genevieve Phillips"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+
+easypackages::libraries("dplyr","tidyr","r4ss","ggplot2","devtools","shiny","shinyjs","ggplot2","reshape2","dplyr","tidyr","r4ss","Rcpp","rlist","viridis","shinyWidgets","shinyFiles","plyr","shinybusy","truncnorm","ggpubr","flextable","officer","gridExtra","wesanderson","data.table","adnuts","shinystan","shinyBS","gt","gtExtras","stringr","ggnewscale","msm","EnvStats","tmvtnorm","future","parallel","parallelly","fs","tools","remotes","ss3diags")
+
+source("./init.R")## also in "../1_dataprep/init.R"
+source("./SS3_support_functions.R")
+source("./SS3_helper.R")
+# source("./functions/init.R")
+source("./makeGrid.f.r")
+
+figure_loc = PATH_DIAG_PLOT
+saveplot = function(label,size=1,type="png",res=800,...) {SavePlot(paste(figure_loc,figure_name,label,sep=""),type=type,size=size,res=res,...)}
+savepng = function(label, width=21, height=29.7,units="cm",res=800,bg = "white",...)  { png(paste(figure_loc,figure_name,label,sep=""),width=width,height=height,units=units,res=res,bg=bg,...)}  #7 inch = 17.78   
+
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+sample.vec <- function(x, ...) x[sample(length(x), ...)]
+
+
+```
+
+# Run diagnostics for models {.tabset}
+
+## Table of outputs for report
+
+The following are the outputs from sequential updates to the 2023 model (update catch, cpue, length-frequency).
+
+The tables are needed for the report. Modify the input R script to make sure it contains all the model names that you want to include.
+
+```{r tables_of_results_2026}
+
+source("00_extract_derived_quants.R")
+
+knitr::kable(results_updates)
+knitr::kable(results_sens)
+knitr::kable(results_lik)
+knitr::kable(results_sens_lik)
+knitr::kable(results_grid)
+knitr::kable(results_grid_lik)
+
+results_updates
+results_sens
+results_grid
+# results1_grid
+# results2_grid
+
+
+```
+
+## Plot model outputs
+
+First, pick a model, then run the scripts below to generate plots for:
+
+* 1: CPUE
+* 2: Length frequency
+* 3: Selectivity
+* 4: Tagging data
+* 5: Recruitment
+* 6: Movement
+* 7: Fishing mortality (F)
+* 8: Biomass estimates
+* 9: Growth
+* 10: Natural mortality (M)
+* 11: ss3diags
+
+```{r model_choice}
+
+plot_model <- SS_output(dir= paste0(PATH_MODELRUNS,'/4_update_L50'),covar=TRUE,forecast=FALSE)
+# plot_model <- SS_output(dir= paste0(PATH_SENSITIVITES,'/s1e_all_cpue'),covar=TRUE,forecast=FALSE)
+
+base_dir <- paste0(PATH_MODELRUNS, '/4_update_L50',sep="")
+
+MODEL_NAME <- '4_update_L50'
+BASE_2026 <- '4_update_L50'
+BASE_2023 <-  '0_base_2023'
+mod_base <- '4_update_L50'
+
+
+## paths
+
+paths_for_models <- c(
+  rep(PATH_MODELRUNS, length(mod_update_names))
+)
+
+
+models <- c(mod_update_names) #, mod_sens_names) #, mod_grid_names)
+
+growth_models <- c(paste0(PATH_MODELRUNS,"4_update_L50",sep=""),
+                   paste0(PATH_SENSITIVITES, "s3_Linf_est", sep=""),
+                   paste0(PATH_SENSITIVITES, "s4_Linf_est_LL", sep=""),
+                   paste0(PATH_SENSITIVITES, "s5_Linf_est_LL2", sep=""))
+
+names(growth_models) <- c("base_2026","s3_Linf_est","s4_Linf_est_LL", "s5_Linf_est_LL2")#,"s6_Linf_95") 
+
+paths_for_grow_models <- c(rep(PATH_SENSITIVITES, length(growth_models))
+)
+
+mod_catch_names <- c("4_update_L50", "s2_update_som")
+
+catch_models <- c(paste0(PATH_MODELRUNS,"4_update_L50",sep=""),
+                   paste0(PATH_SENSITIVITES, "s2_update_som", sep=""))
+
+names(catch_models) <- c("4_update_L50","s2_update_som") 
+
+paths_for_catch_models <- c(rep(PATH_SENSITIVITES, length(catch_models))
+)
+
+
+mod_catch_names <- c("4_update_L50","s2_update_som")
+
+M_models <- c(paste0(PATH_MODELRUNS,"4_update_L50",sep=""),
+                   paste0(PATH_SENSITIVITES, "s7_natM_lorenzen", sep=""))
+
+M_mod_names <- c("4_update_L50", "s7_natM_lorenzen")
+
+ names(M_models) <- c("base_2026", "s7_natM_lorenzen")
+
+CPUE_models <- c(paste0(PATH_SENSITIVITES, "4_update_L50", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1a_MDV_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1b_PSLS_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1c_BAI_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1d_ABBI_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1e_all_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1f_PL_ABBI_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1g_PSLS_BAI_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1h_PL_q1_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1i_PSLS_q1_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s9_catchability", sep="")
+                 )
+CPUE_names <- c("4_update_L50", "s1a_MDV_cpue", "s1b_PSLS_cpue" ,"s1c_BAI_cpue", "s1d_ABBI_cpue", "s1e_all_cpue","s1f_PL_ABBI_cpue", "s1g_PSLS_BAI_cpue","s1h_PL_q1_cpue","s1i_PSLS_q1_cpue","s9_catchability")
+names(CPUE_models) <- c("4_update_L50", "s1a_MDV_cpue", "s1b_PSLS_cpue" ,"s1c_BAI_cpue", "s1d_ABBI_cpue", "s1e_all_cpue","s1f_PL_ABBI_cpue", "s1g_PSLS_BAI_cpue","s1h_PL_q1_cpue","s1i_PSLS_q1_cpue","s9_catchability")
+
+paths_for_cpue_models <- c(rep(PATH_SENSITIVITES, length(CPUE_models))
+)
+
+time_models <- c(paste0(PATH_MODELRUNS, "4_update_L50", sep=""),
+                     paste0(PATH_SENSITIVITES, "s8_mod_time", sep="")
+                     )
+
+names(time_models) <- c("base_2026", "s8_mod_time")
+
+
+extra_models <- c(paste0(PATH_SENSITIVITES, "4_update_L50", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1f_PL_ABBI_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1g_PSLS_BAI_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1h_PL_q1_cpue", sep=""),
+                 paste0(PATH_SENSITIVITES, "s1i_PSLS_q1_cpue", sep=""),
+
+                 paste0(PATH_SENSITIVITES, "s10_sigmaR")
+                 )
+extra_names <- c("4_update_L50", "s1f_PL_ABBI_cpue", "s1g_PSLS_BAI_cpue","s1h_PL_q1_cpue","s1i_PSLS_q1_cpue","s10_sigmaR")
+names(extra_models) <- c("4_update_L50" ,"s1f_PL_ABBI_cpue", "s1g_PSLS_BAI_cpue","s1h_PL_q1_cpue","s1i_PSLS_q1_cpue","s10_sigmaR")
+
+paths_for_extra_models <- c(rep(PATH_SENSITIVITES, length(extra_models))
+)
+```
+
+## Diagnostic plots, likelihood profiles, retrospectives, and jitter analysis
+
+```{r diagnostic_plots}
+
+source("01_plot_cpue_fits.R")
+source("02_plot_lf_fits.R")
+source("03_plot_sel.R")
+source("04_plot_tags.R")
+source("05_plot_rec.R")
+source("07_plot_F.R")
+source("08_plot_biomass.R")
+source("09_plot_growth.R")
+source("10_plot_M.R")
+source("12_plot_likelihood_profiles.R")
+source("13_plot_retrospective.R")
+setwd(PATH_DIAGNOSTICS)
+source("15_jitter_analysis.R")
+
+```
+
+

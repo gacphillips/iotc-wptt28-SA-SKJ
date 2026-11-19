@@ -1,0 +1,120 @@
+---
+title: "Run grid / ensemble of models"
+author: "Genevieve Phillips"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE)
+
+easypackages::libraries("dplyr","tidyr","r4ss","ggplot2")
+
+source("init.R")
+source("SS3_helper.r")
+source("SS3_support_functions.r")
+source("ss3runsFun.R")
+
+figure_loc = PATH_GRID_PLOT
+saveplot = function(label,size=1,type="png",res=800,...) {SavePlot(paste(figure_loc,figure_name,label,sep=""),type=type,size=size,res=res,...)}
+savepng = function(label, width=21, height=29.7,units="cm",res=800,bg = "white",...)  { png(paste(figure_loc,figure_name,label,sep=""),width=width,height=height,units=units,res=res,bg=bg,...)}  #7 inch = 17.78   
+
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+sample.vec <- function(x, ...) x[sample(length(x), ...)]
+
+```
+
+# Run grid / ensemble of models {.tabset}
+
+## Set up template for grid
+
+First thing to do is to ensure that the file "gridTemplate" contains the TEMPLATEdata.ss and TEMPLATEcontrol.ss files. These files need to contain all the parameters that are to be used in the grid.
+
+Parameters are added like this: # xxx "param_name" followed by the parameter.
+
+Input the parameters to test in the same format as the regular parameters.
+
+This time I have created the template manually as it was easier. There may be a way to automate this, but I haven't explored that this year.
+
+Once that is done, edit the R file "makeGrid" to ensure the correct parameters are included in the grid runs.
+
+** MANUALLY CHECK THE FILES ** 
+
+Then, run the below code.
+
+```{r template}
+
+## 
+
+source(paste0(PATH_GRID, "makeGrid.f.r", sep=""))
+
+gridList = makeGrid.SKJ(path = PATH_GRID,makeGrid = T, m.val="skj") ## Make all the folders / files for grid
+
+
+```
+
+## NOW RUN THE BATCH PROCESS FROM THE TERMINAL BEFORE MOVING ON TO THE NEXT SCRIPT.
+
+This can done by closing this R script, opening the terminal, and typing:
+"cd "YOUR PATH"
+
+Then type .\gridRun.bat.
+
+```{r run_bat}
+# # Define the path to your batch file
+# batch_file_path <- paste0(PATH_GRID, "gridRun.bat", sep="")
+# 
+# # Run the batch file using system()
+# # intern = TRUE captures the output as a character vector in R
+# # show.output.on.console = TRUE displays the output in the R console
+# system(batch_file_path, intern = TRUE, show.output.on.console = TRUE)
+
+
+
+```
+
+## Make Grid object
+
+```{r make_grid_object}
+
+GRID_INPUT_OBJECT=list();
+'%&%' <- function(x, y) paste0(x,y)
+
+GRID_INPUT_OBJECT[["2026"]] = list()
+
+##########
+# 2023 
+##########
+
+for (GridName in c('SKJ')) {
+	if(GridName == 'SKJ') GridList = makeGrid.SKJ(path = NULL,makeGrid =F)
+	Grid = list()
+	gridDir <- PATH_GRID
+	for (i in 1:length(GridList)) {
+        tmp <- SS_output(dir = gridDir %&% GridList[i], repfile = "Report.sso", compfile = "CompReport.sso", covar=FALSE,ncols=500,forecast=FALSE)
+        tmp2 <- tmp$derived_quants
+        tmp3 <- subset(tmp2, substring(tmp2$Label, 1, 9) == "ForeCatch")
+        maxYear <- max(as.numeric(substring(tmp3$Label, 11, 14)))
+        if (length(which(substring(tmp2$Label, 1, 9) == "ForeCatch" &  tmp2$Value < 0)) >= 1) {
+            crashElement <- min(which(substring(tmp2$Label, 1, 9) == "ForeCatch" & tmp2$Value < 0))
+            firstCrashYear <- substring(tmp2[crashElement, ]$Label, 11, 14)
+            tmp2[substring(tmp2$Label, 5, 8) %in% c((as.numeric(firstCrashYear) - 1):as.numeric(maxYear)), ]$Value <- 0.1
+            tmp2[substring(tmp2$Label, 3, 6) %in% c((as.numeric(firstCrashYear) - 1):as.numeric(maxYear)), ]$Value <- 5
+        }
+        tmp <- list(tmp2, tmp$recruit, tmp$maximum_gradient_component, tmp$likelihoods_used, tmp$cpue, tmp$Length_comp_Eff_N_tuning_check)
+        names(tmp) <- c("derived_quants", "recruit", "maximum_gradient_component", "likelihoods_used", "cpue", "Length_comp_Eff_N_tuning_check")
+        Grid[[GridList[i]]] = tmp
+		
+	}
+	GRID_INPUT_OBJECT[["2026"]][[GridName]] = Grid
+}
+
+##########
+# final 
+##########
+
+save(list='GRID_INPUT_OBJECT',file='10b_GRID_INPUT_OBJECT.object')
+
+
+```
+

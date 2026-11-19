@@ -1,0 +1,2313 @@
+---
+title: "SKJ data input for SS3 in 2026"
+author: "Genevieve Phillips"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: false
+    number_sections: false
+    theme: flatly
+    highlight: kate
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, message=FALSE)
+library(cowplot)
+library(dbplyr)
+library(dplyr)
+library(FishFreqTree) ##remotes::install_github("HaikunXu/FishFreqTree")
+library(ggplot2)
+library(ggridges)
+library(grid)
+library(lubridate)
+# library(multiscales)
+library(png)
+library(readr)
+library(readxl)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(tidyr)
+library(readr)
+library(ggsci)
+
+```
+
+# Input data for SKJ SS3 stock assessment {.tabset .tabset-pills}
+
+This document outlines running code to generate catch data input for the stock assessment for SKJ in Stock Synthesis III (SS3) using code developed by Dan Fu and others at the Indian Ocean Tuna Commission (IOTC / FAO).
+
+This document will ingest data, create output to be pasted into the SS3 input files.
+
+## Folder structure
+
+-   **age**
+
+none
+
+-   **CE**
+
+1) Data = IOTC-2026-WPTT28(DP)- raised_SKJ (data current as of May 2026, just missing 2025 data)
+
+-   **CPUE**
+
+1) SKJ_CPUE.csv - all CPUEs from the previous assessment - only 1 area.
+
+-   **LF**
+
+1) IOTC-DATASETS-SF-SKJ-1982-2024-WIDE-FORMAT.csv
+
+-   **M**
+
+1) M = fixed at 0.8
+2) M_quantilesAnd_weighting_ICCAT.R -- Lorenzen natural M
+
+-   **growth**
+
+1) input.growth.R (code to estimate several variations of growth)
+
+-   **maturity**
+
+1) input.maturity.R (code to estimate maturity ogive)
+
+-   **plots**
+
+Output folder for any plots of data
+
+-   **SS3_input**
+
+Various files for SS3 input. SS3 script reads these inputs to use in the assessment.
+
+-   **Tag**
+
+Tag_dbase_Oct2015.accdb
+
+**fleets_model_fleets.csv** <-- model fleets for assessment --> TODO
+
+### DEFINITION OF FISHERIES 
+
+1.	PL – Maldivian Pole and Line fleet. 
+2.	PSLS - FAD/log associated Purse Seine (PS) sets from the EU/Seychelles fleets.
+3.	PSFS - unassociated PS sets from the EU/Seychelles fleets. 
+4.	Gillnet - includes primarily gillnet fleets from Sri Lanka, Iran, Indonesia and Pakistan
+5.	Line - includes primarily handline and small coastal longline gears from Yemen, Sri Lanka, Maldivian, and Madagascar.
+6.	Longline – trivial catches from Distant water longline fishing fleets 
+7.	Other – includes all other fleets, primarily non-EU/Seychelles PS fleets, trolling, and small coastal fleets (e.g. ring nets).
+
+### Fleet/Survey Area
+
+8. PL_CPUE
+9. PSLS_CPUE_LONG
+10. BAI_CPUE
+10(?). Behaviour_CPUE
+
+
+```{r setupworking_space_figures}
+
+source("./functions/init.R")
+source("./functions/ggtheme.R")
+source("./functions/mutate_cond.R")
+source("./functions/trim.R")
+source("./functions/iGRID.R")
+source("./functions/map.R")
+source("./functions/helper.R")
+source("./functions/LFA_helper.R")
+source("./functions/CV.for.CPUE.R")
+#setwd("tag")
+
+figure_loc = PATH_DATA_PLOT
+
+## Figure setup and functions
+saveplot = function(label,size=1,type="png",res=800,...) {SavePlot(paste(figure_loc,figure_name,label,sep=""),type=type,size=size,res=res,...)}
+savepng = function(label, width=21, height=29.7,units="cm",res=800,bg = "white",...)  { png(paste(figure_loc,figure_name,label,sep=""),width=width,height=height,units=units,res=res,bg=bg,...)}  #7 inch = 17.78   
+
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+sample.vec <- function(x, ...) x[sample(length(x), ...)]
+
+```
+
+## Catch Effort (CE) data
+
+-   CE.1a.input.R
+-   CE.1b.plot
+
+```{r CE_1a_input_setup}
+
+## Set up Figure plot functions
+
+figure_name = "CE_1a_input_"
+
+## Make input object for SS3
+
+CE_1a_INPUT_OBJECT=list()
+
+## Set up variable for 'model fisheries'
+ModelFisheries = c("PL","PSLS","PSFS","GL","LI","LL","Other")
+
+```
+
+### Read in catch effort data from excel spreadsheets.
+
+```{r read_CE_data}
+
+Data_dp <- read_csv(make.filename(file = "IOTC-2026-WPTT28(DP)- raised_SKJ.csv",path=paste0(PATH_DATA,"CE\\"))) ## Data from data prep meeting
+Data <- read_csv(make.filename(file = "IOTC-WPTT28-AS-SKJ-CEraised_1950_2025.csv", path=paste0(PATH_DATA,"CE/")))
+
+
+dHelper <- read_excel(make.filename(file = "helper.xlsx",path=paste0(PATH_DATA,"CE\\")),sheet = "CE") 
+
+dHelper <- dHelper %>%
+  	dplyr::mutate(Fishery=replace(Fishery, Fishery=='BB', 'PL')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Gillnet', 'GL')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Line', 'LI')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Longline', 'LL')) %>% 	
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='OTHER', 'Other')) %>%
+		dplyr::mutate(Fishery=replace(Fishery, Gear %in% c('TROL','TROLM','TROLN'), 'Other')) %>% 		 		
+		dplyr::select(Fleet,Gear,SchoolType,Fishery)
+
+
+Data_dp <- Data_dp %>% 
+    dplyr::left_join(dHelper,by=c("Gear"="Gear","Fleet"="Fleet", "SchoolType"="SchoolType")) %>% 
+		dplyr::mutate(FisheryCode=Fishery,ModelFishery = Fishery,Country=trim(Fleet),Catch = NCmtFish,Grid=as.character(Grid),Quarter = floor((Month-1)/3) + 1,AssessmentArea = 1, ModelArea =1) %>%		
+		dplyr::select(Gear,Country,SchoolType,FisheryCode,ModelFishery,Year,Quarter,Month,Grid,Catch)		
+
+Data <- Data %>% 
+		dplyr::left_join(dHelper,by=c("Gear"="Gear","Fleet"="Fleet", "SchoolType"="SchoolType")) %>% 
+		dplyr::mutate(FisheryCode=Fishery,ModelFishery = Fishery,Country=trim(Fleet),Catch = NCmtFish,Grid=as.character(Grid),Quarter = floor((Month-1)/3) + 1,AssessmentArea = 1, ModelArea =1) %>%		
+		dplyr::select(Gear,Country,SchoolType,FisheryCode,ModelFishery,Year,Quarter,Month,Grid,Catch)
+
+
+	
+data <- Data
+data_dp <- Data_dp
+
+
+```
+
+### Plot the CE data {.tabset .tabset-pills}
+
+#### 1) Catch by model fishery
+
+```{r catch_by_model_fishery, eval=TRUE}
+
+##################   
+# catch by FisheryGroup and Area
+##################  
+				
+# catch by FisheryGroup
+work <- data %>% 
+	dplyr::mutate(ModelFishery = factor(ModelFishery,levels=c("Other","LL","LI","GL","PSFS","PSLS","PL")))
+
+work_dp <- data_dp %>% 
+	dplyr::mutate(ModelFishery = factor(ModelFishery,levels=c("Other","LL","LI","GL","PSFS","PSLS","PL")))
+
+##Changes since DP (ModelFishery data):
+
+summary_work <- work %>%
+  group_by(Year, ModelFishery) %>%
+  summarise(totCatch = sum(Catch))
+
+summary_work_dp <- work_dp %>%
+  group_by(Year, ModelFishery) %>%
+  summarise(totCatch = sum(Catch))
+
+summary <- left_join(summary_work, summary_work_dp, 
+                     by= c("Year", "ModelFishery"), suffix = c("old", "new"))
+
+summary <- summary %>%
+  mutate(ChangeCatch = round(totCatchnew - totCatchold,0))
+
+write.csv(summary, file = paste0(PATH_DATA, "/CE/", "Model_fishery_changes_since_dp.csv"))
+
+
+## Changes since DP - country gear etc.
+
+summary_work <- work %>%
+  group_by(Year, Country, Gear, SchoolType) %>%
+  summarise(totCatch = sum(Catch))
+
+summary_work_dp <- work_dp %>%
+  group_by(Year, Country, Gear, SchoolType) %>%
+  summarise(totCatch = sum(Catch))
+
+summary <- left_join(summary_work, summary_work_dp, 
+                     by= c("Year", "Country", "Gear", "SchoolType"), suffix = c("old", "new"))
+
+summary <- summary %>%
+  mutate(ChangeCatch = round(totCatchnew - totCatchold,0))
+
+write.csv(summary, file = paste0(PATH_DATA, "/CE/", "All_CE_changes_since_dp.csv"))
+
+```
+
+```{r plots_CE}
+
+savepng("catch by Fishery.png",width=17.78,height=17.78)
+ggplot() +
+	xlab("Year") + ylab("Catch (t)") +
+  scale_x_continuous(breaks = seq(1950, 2025, by = 10)) +
+  scale_y_continuous(labels = scales::comma) +
+	geom_bar(data=work,aes(x=Year,weight=Catch,group=ModelFishery,fill=ModelFishery),colour=NA) +
+	geom_line(data=data.frame(Year = 2020:2023, Catch = 621674), aes(x=Year,y=Catch),linewidth=2,color='red') +
+	geom_line(data=data.frame(Year = 2023:2026, Catch = 681350), aes(x=Year,y=Catch),linewidth=2,color='red') +
+		scale_fill_manual(name="",values=c("GL"="#D7E4BDFF", "LL" = "#374BE5FF","LI" = "#B3A2C7FF", "PL" = "#FAC090FF","PSFS" = "#FF96A3FF", "PSLS" = "#FF778AFF","Other" = "#909090FF")) +
+  scale_colour_manual(name="",values=c("GL"="#A6B389FF","LL" = "#273AC0FF","LI" = "#8E7EA0FF", "PL" = "#CC935FFF","PSFS" = "#D81C4AFF", "PSLS" = "#D81C4AFF","Other" = "#717171FF")) +
+		ggtheme + theme(legend.position=c(0.1,0.75))
+dev.off()
+
+
+##################  
+# catch by SS3 Fishery
+##################
+
+# Compared to 2023 assessment
+dat <- r4ss::SS_readdat(paste0(PATH_MODELRUNS, "0_base_2023/", "data.ss"))
+dat <- dat$catch
+dat <- dat %>%
+		dplyr::filter(year > 0) %>%
+		dplyr::mutate(yearqtr = year + (seas-1)/4+1/8)
+
+work = data	%>% 
+			group_by(Year,Quarter,ModelFishery) %>% 
+			summarise(Catch = sum(Catch)) %>% 
+			as.data.frame() %>%	
+			dplyr::mutate(ModelFishery = factor(ModelFishery,levels=c('PL','PSLS','PSFS','GL',"LI","LL","Other"))) %>%
+			dplyr::mutate(ModelFleet = as.numeric(ModelFishery)) %>% 
+			dplyr::mutate(YearQtr = Year + (Quarter-1)/4+1/8) %>%
+			dplyr::arrange(ModelFleet,Year,Quarter)  %>%
+			dplyr::select(Year,Quarter,YearQtr,ModelFishery,ModelFleet,Catch)  %>%
+			as.data.frame()
+
+savepng("catch by Fishery_comp_2023.png",width=17.78,height=17.78)
+par(las=0,mar=c(2,4,2,1),mfrow=c(4,2))
+for (i in 1:length(ModelFisheries)) {
+	plot(work[work$ModelFishery == ModelFisheries[i] ,'YearQtr'],work[work$ModelFishery == ModelFisheries[i],"Catch"],ylim=c(0,max(work[work$ModelFleet == i ,'Catch'])),type='n',xlab='',ylab='Catch (t)');
+  lines(dat[dat$fleet == i ,'yearqtr'],dat[dat$fleet == i ,'catch'],col='purple',lwd=2)
+	lines(work[work$ModelFishery == ModelFisheries[i] ,'YearQtr'],work[work$ModelFishery == ModelFisheries[i],"Catch"],col='slate gray',lwd=2)
+ 	mtext(ModelFisheries[i],line=0.1,adj=0.5)
+}
+dev.off()
+
+catch20_22 <- work %>% 
+  select(Year,Catch) %>% 
+  filter(Year %in% c(2020,2021,2022)) %>% summarise(avCatch = round(sum(Catch)/3,0))
+catch23_25 <- work %>% 
+  select(Year,Catch) %>% 
+  filter(Year %in% c(2023,2024,2025)) %>% summarise(avCatch = round(sum(Catch)/3,0))
+
+print(catch20_22)
+print(catch23_25)
+
+```
+
+#### 3) Catch over time and space
+
+```{r plot_1b}
+
+ add.legend <- function(x,y,size,scale=1,col = col,legend=legend) {
+        inches = sqrt(size*scale)
+        rx <- xinch(inches)
+        ry <- yinch(inches)
+		step = 360/length(col)
+        xi <- x+rx*cos(2*pi*seq(from=90-step/2,by=-step,length=length(col))/360)
+        yi <- y+ry*sin(2*pi*seq(from=90-step/2,by=-step,length=length(col))/360)
+		text(xi,yi,labels=legend)
+  
+}
+
+GRID_PARAM=setup_GRID_PARAM()
+GRID = setup_GRID(GRID_PARAM)
+
+
+
+##############
+# Spatial distribution
+##############
+
+			
+
+work = data %>%
+		dplyr::filter(Year %in% c(1980:2025)) %>%
+		dplyr::group_by(Grid) %>%
+        dplyr::do(cbind(data.frame("Catch"=sum(.$Catch)),rbind(tapply(.$Catch,.$ModelFishery,Sum)/sum(.$Catch))))  %>%
+		as.data.frame() %>%
+		replace_na(list('PL'=0,'PSLS'=0,'PSFS'=0,'GL'=0,'LI'=0,'LL'=0,'Other'=0)) 
+
+savepng('spatial distribution.png',width=12*2.54,height=7*2.54)
+par(mar=c(5.1,4.1,4.1,8.2),xaxs="i",yaxs="i") 
+GRID.plot(GRID_PARAM,xlim=c(20,130),ylim=c(-50,30),col=NA,xaxt='n',yaxt='n')
+axis(1,at =seq(20,130,by=10),labels=c('20E','','40E','','60E','','80E','','100E','','120E',''),cex.axis=0.8)
+axis(2,at =seq(-40,30,by=5),labels=c('','35S','','25S','','15S','','5S','','5N','','15N','','25N',''),cex.axis=0.8)
+work$size = work$Catch/max(work$Catch)
+maps::map(database='world2',add=TRUE,fill=T,col="gray") #DarkOliveGreen3
+for(i in 1:nrow(work))
+	add.pie(GRID[[work[i,"Grid"]]],proportion=as.vector(unlist(work[i,c('PL','PSLS','PSFS','GL','LI','LL','Other')])),size=work[i,"size"],col=c("#FAC090FF","#FF778AFF","#FF96A3FF","#D7E4BDFF","#B3A2C7FF","#374BE5FF","#909090FF"),scale=0.1,fg="black") #
+par(xpd=T)
+rect(110,7.5,140,32.5,col="white")
+add.pie(grid = GRID[[get.id.from.lat.long(GRID_PARAM,20,125)]],size = 2000000/max(work$Catch),proportion=c(1/7,1/7,1/7,1/7,1/7,1/7,1/7),col=c("#FAC090FF","#FF778AFF","#FF96A3FF","#D7E4BDFF","#B3A2C7FF","#374BE5FF","#909090FF"),scale=0.1,fg="black")
+add.legend(x=GRID[[get.id.from.lat.long(GRID_PARAM,20,125)]]$id_long[1],y=GRID[[get.id.from.lat.long(GRID_PARAM,20,125)]]$id_lat[1],
+			size=2000000/max(work$Catch),scale=0.3,col=c("#FAC090FF","#FF778AFF","#FF96A3FF","#D7E4BDFF","#B3A2C7FF","#374BE5FF","#909090FF"),legend=c('PL','PSLS','PSFS','GL','LI','LL','Other'))
+lines(c(122.5,125,130),c(17.5,23.5,23.5))
+text(130,23.5,"2,000,000 (MT)",adj=c(0,0.5))
+text(125,30,"SKJ Catch (1980-2025)",cex=1.3)
+text(125,27.5,"",cex=1.3)
+# skj.regions()
+dev.off()
+
+
+```
+
+###  {.unnumbered}
+
+### Organise catch data for SS3 input
+
+```{r catch_for_SS3}
+
+work <- data	%>% 
+	group_by(Year,Quarter,ModelFishery) %>%
+  summarise(Catch = sum(Catch)) %>% 
+	dplyr::mutate(ModelFishery = factor(ModelFishery,levels=c('PL','PSLS','PSFS','GL',"LI","LL","Other"))) %>%
+	dplyr::mutate(ModelFleet = as.numeric(ModelFishery)) %>%
+  rename(season = Quarter) %>%
+  select(Year, season, ModelFleet, Catch) %>%
+	dplyr::arrange(ModelFleet, Year, season) %>%
+  mutate(Catch = round(Catch,)) %>%
+  ungroup() %>%
+  filter(Catch > 0) %>%
+	filter(Year >= 1950) %>%
+	add_row(
+    Year = -999, 
+    season = 1, 
+    ModelFleet = 1:7,
+    Catch = 0
+  ) %>%
+  arrange(ModelFleet, Year == -999, Year) 
+
+tot_catch <- work %>% filter(Year %in% c(2024, 2025)) %>%
+  group_by(ModelFleet) %>%
+  summarise(tot_catch = sum(Catch))
+
+dat <- r4ss::SS_readdat(paste0(PATH_MODELRUNS, "0_base_2023/data.ss"), verbose=FALSE)
+
+dat <- subset(dat$catch,year!=-999)
+
+temp <-  dat[,1:4]
+colnames(temp) = colnames(work)
+
+work <- arrange(work,ModelFleet,Year) 
+
+write.csv(work, file=paste0(PATH_SS3_INPUT,"SS3catch2026.csv"))
+
+#################################################################
+no_somalia <- data %>%
+  filter(Country != "SOM") %>%
+  group_by(Year,Quarter,ModelFishery) %>%
+  summarise(Catch = sum(Catch)) %>% 
+	dplyr::mutate(ModelFishery = factor(ModelFishery,levels=c('PL','PSLS','PSFS','GL',"LI","LL","Other"))) %>%
+	dplyr::mutate(ModelFleet = as.numeric(ModelFishery)) %>%
+  rename(season = Quarter) %>%
+  select(Year, season, ModelFleet, Catch) %>%
+	dplyr::arrange(ModelFleet, Year, season) %>%
+  mutate(Catch = round(Catch,)) %>%
+  ungroup() %>%
+  filter(Catch > 0) %>%
+	filter(Year >= 1950) %>%
+	add_row(
+    Year = -999, 
+    season = 1, 
+    ModelFleet = 1:7,
+    Catch = 0
+  ) %>%
+  arrange(ModelFleet, Year == -999, Year) 
+
+tot_catch_no_som <- no_somalia %>% filter(Year %in% c(2024, 2025)) %>%
+  group_by(ModelFleet) %>%
+  summarise(tot_catch = sum(Catch))
+
+dat <- r4ss::SS_readdat(paste0(PATH_MODELRUNS, "0_base_2023/data.ss"), verbose=FALSE)
+
+dat <- subset(dat$catch,year!=-999)
+
+temp <-  dat[,1:4]
+colnames(temp) = colnames(no_somalia)
+
+no_somalia <- arrange(no_somalia,ModelFleet,Year) 
+
+write.csv(no_somalia, file=paste0(PATH_SS3_INPUT,"SS3catch2026_no_somalia.csv"))
+
+```
+
+### Save CE input data
+
+```{r save_input_data}
+CE_1a_INPUT_OBJECT[['data']]=data
+save(list='CE_1a_INPUT_OBJECT',file=paste0(PATH_SS3_INPUT,'CE_1a_input.object'))
+
+```
+
+## Length-frequency data
+
+-   LF.1a.input.R
+-   LF.1b.plot.R
+
+```{r LF}
+
+figure_name = "LF_input_"
+
+LF_1_INPUT_OBJECT = list()	
+
+```
+
+```{r read_LF_data}
+ModelFisheries =c('PL','PSLS','PSFS','GL',"LI","LL","Other")
+
+# Data <- read_csv(make.filename(file = "IOTC-DATASETS-SF-SKJ-1982-2024-WIDE-FORMAT.csv",path=paste0(PATH_DATA, "LF/")))
+Data <- read_csv(make.filename(file = "IOTC-2026-WPTT28-DATA06-SKJ-1982-2025-WIDE-FORMAT.csv",path=paste0(PATH_DATA, "LF/")))
+Data <- Data %>% 
+	dplyr::rename(Fleet = FLEET_CODE,Year=YEAR,MonthStart=MONTH_START,MonthEnd =MONTH_END,Grid =FISHING_GROUND_CODE, Gear = GEAR_CODE,Species =SPECIES_CODE,SchoolType=SCHOOL_TYPE_CODE, MeasureType =MEASURE_TYPE_CODE,	FirstClassLow =FIRST_CLASS_LOW,	SizeInterval =SIZE_INTERVAL,TnoFish =NO_FISH,TkgFish = KG_FISH)
+
+
+dHelper <- read_excel(make.filename(file = "helper.xlsx",path=paste0(PATH_DATA,"CE/")),sheet = "LF") 
+dHelper = dHelper %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='BB', 'PL')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Gillnet', 'GL')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Line', 'LI')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Longline', 'LL')) %>% 	
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='OTHER', 'Other')) %>% 	
+		dplyr::mutate(Fishery=replace(Fishery, Gear %in% c('TROL','TROLM','TROLN'), 'Other')) %>% 		
+		dplyr::select(Fleet,Gear,SchoolType,Fishery)
+	
+
+Data = Data %>% 
+		dplyr::left_join(dHelper,by=c("Gear"="Gear","Fleet"="Fleet","SchoolType"="SchoolType")) %>% 
+	    dplyr::mutate(LatCell = 0, LongCell = 0) %>%
+		mutate_cond(substring(Grid,1,1) == "5",LatCell=1,LongCell=1) %>%
+		mutate_cond(substring(Grid,1,1) == "6",LatCell=5,LongCell=5) %>%
+		mutate_cond(substring(Grid,1,1) == "1",LatCell=5,LongCell=10) %>%
+		mutate_cond(substring(Grid,1,1) == "2",LatCell=10,LongCell=20) %>%
+		mutate_cond(substring(Grid,1,1) == "3",LatCell=10,LongCell=10) %>%
+		mutate_cond(substring(Grid,1,1) == "4",LatCell=20,LongCell=20) %>%
+		dplyr::filter(!(LatCell == 0 & LongCell == 0)) %>%
+		dplyr::mutate(quadrant = as.numeric(substring(Grid,2,2)), Lat=999,Long=999)  %>%
+		mutate_cond(quadrant ==1,Lat= as.numeric(substring(Grid,3,4)) + LatCell/2, Long = as.numeric(substring(Grid,5,7)) + LongCell/2) %>%
+		mutate_cond(quadrant ==2,Lat= -as.numeric(substring(Grid,3,4)) - LatCell/2, Long = as.numeric(substring(Grid,5,7)) + LongCell/2) %>%
+		dplyr::mutate(FisheryCode=Fishery,ModelFishery = factor(Fishery,levels= ModelFisheries), ModelFleet = as.numeric(ModelFishery),Country=trim(Fleet),Grid=as.character(Grid),Month=MonthStart,Quarter = floor((MonthStart-1)/3) + 1,AssessmentArea = 1, ModelArea =1,AssessmentAreaName=1,ModelAreaName=1) %>%				
+		dplyr::select(Year,Quarter,Month,Grid,,Lat,Long,AssessmentArea,ModelArea,FisheryCode,ModelFishery,ModelFleet,Country,Gear,SchoolType,FirstClassLow,SizeInterval,C001:C150)
+		
+C_labels = c(Paste("C00",1:9),Paste("C0",10:99), Paste("C",100:150))
+data = Data %>% 
+	dplyr::group_by(Year,Quarter,Month,Grid,,Lat,Long,AssessmentArea,ModelArea,FisheryCode,ModelFishery,ModelFleet,Country,Gear,SchoolType,FirstClassLow,SizeInterval) %>% 
+	dplyr::summarise_at(C_labels,list(Sum)) %>%
+	as.data.frame() 
+	
+data = data %>%	
+	dplyr::mutate(sno=rowSums(dplyr::select(data,C001:C150))) %>%
+	dplyr::mutate(C089=rowSums(select(data,C089:C150))) %>%		
+	dplyr::select(Year,Quarter,Month,Grid,,Lat,Long,AssessmentArea,ModelArea,FisheryCode,ModelFishery,ModelFleet,Country,Gear,SchoolType,FirstClassLow,SizeInterval,sno,C001:C089) %>% 
+	tidyr::gather(length,total,C001:C089) %>%
+	dplyr::mutate(length = FirstClassLow+(as.numeric(substr(length,2,4))-1)*SizeInterval) %>% 
+	dplyr::mutate(length=ifelse(length<100,Paste("L0",length),Paste("L",length))) %>% 
+	tidyr::spread(length,total,fill=0)
+
+
+wtf <- data %>% filter(is.na(ModelFleet))
+
+wtf2 <- wtf %>%
+  select(Year, Country, Gear, SchoolType, sno) %>%
+  group_by(Year, Country, Gear, SchoolType) %>%
+  summarise(tno = sum(sno))
+#
+#
+wtf3 <- wtf2 %>%
+  select(Country, Gear, SchoolType, tno) %>%
+  group_by(Country, Gear, SchoolType) %>%
+  summarise(ttno = sum(tno))
+
+print(wtf3)
+
+# work1 <- data %>% filter(Country == "LKA", Year == 2012)
+
+# data <- data %>% filter(!is.na(ModelFleet))
+
+
+```
+
+### Output LF data to SS3 - NO FILTERING
+
+```{r output_LF_SS3}
+		
+L_labels  = c(Paste("L0",seq(10,98,by=1)))
+
+## first no filtering:
+work = data %>% 
+  dplyr::group_by(ModelFishery,ModelFleet,Year,Quarter) %>% 
+	dplyr::summarise_at(L_labels,list(Sum)) %>%
+	as.data.frame() %>%
+	tidyr::gather(length,total,L010:L098) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	mutate(length = ifelse(length < 20, 20, length)) %>% 
+	mutate(length = ifelse(length > 96, 96, length)) %>%
+	mutate(length = 20+((length-20) %/% 4) * 4) %>%
+	mutate(length = ifelse(length<100,Paste("L0",length),Paste("L",length))) %>%
+	dplyr::group_by(ModelFishery,ModelFleet,Year,Quarter,length) %>% 
+	dplyr::summarise_at("total",list(Sum)) %>% 
+	tidyr::spread(length,total,fill=0) %>% 
+	as.data.frame()
+
+L_labels  = c(Paste("L0",seq(20,96,by=4)))
+work = work %>%
+	mutate(sno=rowSums(select(work,L020:L096))) %>%	
+	mutate(Nsamp = ifelse(ModelFishery == 'Other',pmin(sno/10,100), pmin(sno/10,1000))) %>%
+	mutate(Quarter = Quarter*3-0.5,Gender = 0,Part = 0) %>%
+	dplyr::select(Year,Quarter,ModelFleet,Gender,Part,Nsamp,all_of(L_labels)) %>%
+	dplyr::arrange(ModelFleet,Year,Quarter)		
+
+work[,L_labels][work[,L_labels]==0] = 1e-10
+write.table(work,'temp.dat',row.names=F,sep='\t')
+			
+	
+LF_1_INPUT_OBJECT[["data"]] = data
+
+	
+max(data$Year)
+max(work$Year)
+	
+
+save(file="LF_1_INPUT.object",list=c("LF_1_INPUT_OBJECT"))
+### Save SS3 LF input
+
+
+save(file=paste0(PATH_SS3_INPUT,"LF_1_INPUT.object"),list=c("LF_1_INPUT_OBJECT")) 
+write.csv(work, file =paste0(PATH_SS3_INPUT,"SS3LFinput1.csv")) # in data.ss file
+
+
+```
+
+### Plots of LF data - unfiltered data
+
+```{r plots_LF_data}
+
+figure_name = "LF_input_"
+figure_loc = figure_loc
+
+attach(paste0(PATH_SS3_INPUT,"CE_1a_input.object"))
+attach(paste0(PATH_SS3_INPUT,"LF_1_input.object"))
+dataCE = CE_1a_INPUT_OBJECT[['data']]
+data = LF_1_INPUT_OBJECT[['data']]
+
+
+GRID_PARAM=setup_GRID_PARAM()
+GRID = setup_GRID(GRID_PARAM)
+
+library(multimode)
+vMode = function(v,mod0=1) {
+	v = round(v/Sum(v)*100)
+	x = rep(as.numeric(names(v)),v)
+	#return(Mode(x))
+	locations = locmodes(x,mod0)$locations
+	return (locations[is.odd(1:length(locations))])
+}
+
+
+vMean = function(v) {
+	v = round(v/Sum(v)*100)
+	x = rep(as.numeric(names(v)),v)
+	return(Mean(x))
+}
+
+vQuantile = function(v,...) {
+	v = round(v/Sum(v)*100)
+	x = rep(as.numeric(names(v)),v)
+	return(quantile(x,...))
+}
+
+###############
+# Coverage
+###############
+
+
+ModelFisheries = c('PL','PSLS','PSFS','GL','LI','LL','Other')
+work = dataCE
+catchmat <- matrix(NA, 7,2)
+for(i in 1:7){
+	catchmat[i,1] <- min(work[work$ModelFishery == ModelFisheries[i] & work$Catch  > 0,'Year'])
+	catchmat[i,2] <- max(work[work$ModelFishery == ModelFisheries[i] & work$Catch  > 0,'Year'])
+}
+obs <- data %>%
+	dplyr::mutate(ModelFishery = factor(ModelFishery,ModelFisheries)) %>%
+	dplyr::group_by(Year,ModelFishery) %>%
+	dplyr::summarise(n=sum(sno))  %>%
+	as.data.frame() 
+x <- tapply(obs$n, list(obs$Year, obs$ModelFishery), sum)
+x=apply(x,2, function(x) x/Max(x))
+Year <- sort(unique(obs$Year))
+
+
+savepng('coverage_NOFILTERS.png',width=17.78, height=17.78)
+# par(mar=c(3,3,2,1), omi=c(0,0.2,0,0))
+plot(1,1,type="n", ylim=c(0.5,7.5), xlim=c(1950,2025), ylab="", xlab="", yaxt="n")
+for(i in 1:length(ModelFisheries)){
+	symbols(Year, rep(i,length(Year)), circles=sqrt(x[,i]), fg = 1, bg = "slate grey",add=T, inches=0.2)
+	lines(catchmat[i,], rep(i,2), lwd=2, col=2)
+	text(1940, i, ModelFisheries[i], xpd=NA)
+}
+dev.off()
+
+
+###############
+# Assessment LF
+###############
+
+L_labels  = c(Paste("L0",seq(10,98,by=1)))
+dat = data %>% 
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016))))  %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'FLL' & SchoolType == "UNCL" & (Year %in% c(2016:2020))))  %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'GILL' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2021,2022))))  %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'GIOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'HAND' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2020)))) %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'LLCO' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'RIN'  & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2022)))) %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'RNOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2018,2019,2020,2022)))) %>%
+#     dplyr::filter(!(Country == 'LKA' &  Gear == 'TROL' & SchoolType == "UNCL" )) %>%
+#     dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "FS" & (Year %in% c(2019)))) %>%
+#     dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016,2018,2019,2020)))) %>%	
+#     dplyr::filter(!(Country == 'MDV' &  Gear == 'BBOF' & SchoolType == "UNCL"& (Year %in% c(2018,2019)))) %>%	
+#     dplyr::filter(!(Country == 'MUS' &  Gear == 'PS'  & SchoolType == "UNCL" & (Year %in% c(1988:2000,2014))))  %>%
+#     dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "LS" & (Year %in% c(2021))))  %>%
+#     dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "UNCL" & (Year %in% c(2022)))) %>%
+#     dplyr::filter(!(Country == 'THA' &  Gear == 'PSS' & SchoolType== "UNCL" & (Year %in% c(2005:2009,2011:2015,2020:2022)))) %>%
+# 	dplyr::filter(!(Country == 'SYC' &  Gear == 'PS' & SchoolType == "UNCL" & (Year %in% c(2021))))  %>%
+# 	dplyr::filter(!(ModelFishery == 'PL' & (Year < 2000 | Year %in% 2015:2016))) %>%
+# 	dplyr::filter(!(ModelFishery %in% c('GL','Other') & Year  %in% 2007:2010)) %>%
+# 	dplyr::filter(!(ModelFishery %in% c('LI') & Year  < 2018)) %>%
+# 	dplyr::filter(!(ModelFishery %in% c('LL') & Year  < 2011)) %>%
+	dplyr::group_by(Year, Quarter, Month,   Grid, Lat, Long, AssessmentArea, ModelArea, FisheryCode, ModelFishery, ModelFleet, Country, Gear, SchoolType) %>% 
+	dplyr::summarise_at(L_labels,list(Sum)) %>%
+	as.data.frame() %>%
+	tidyr::gather(length,total,L010:L098) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	mutate(length = ifelse(length < 20, 20, length)) %>% 
+	mutate(length = ifelse(length > 98, 98, length)) %>%
+	mutate(length = 20+((length-20) %/% 4) * 4) %>%
+	mutate(length = ifelse(length<100,Paste("L0",length),Paste("L",length))) %>%
+	dplyr::group_by(Year, Quarter, Month,   Grid, Lat, Long, AssessmentArea, ModelArea, FisheryCode, ModelFishery, ModelFleet, Country, Gear, SchoolType,length) %>% 	
+	dplyr::summarise_at("total",list(Sum)) %>% 
+	tidyr::spread(length,total,fill=0) %>% 
+	as.data.frame()
+
+
+
+###############
+# Aggregate LF
+###############
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+			
+work = dat %>% 
+	group_by(ModelFishery) %>% 
+	summarise_at(c(Llabel),list(Sum))
+work[,Llabel] = work[,Llabel]/rowSums(work[,Llabel])
+
+tempFUN = function(i) {
+	temp = work[work$ModelFishery == ModelFisheries[i],Llabel]
+	plot(L,temp[,Llabel],col='blue',xlab="", ylab="", lwd=2,type='l',xlim=range(L),ylim=c(0,max(temp[,Llabel])))
+	lines(range(L), rep(0,2), lty=3)
+	polygon(c(L,rev(range(L))), c(temp[,Llabel], rep(0,2)), col="gray")
+	mtext(side=3,paste(ModelFisheries[i]),line=0.1,cex=1.2)
+}
+
+savepng('Aggregated_NOFILTERS.png',width=15,height=25)
+par(mfrow=c(4,2), mar=c(2,2,2,1),oma=c(2,2,1,1))
+tempFUN(i = 1)
+tempFUN(i = 2)
+tempFUN(i = 3)
+tempFUN(i = 4)
+tempFUN(i = 5)
+tempFUN(i = 6)
+tempFUN(i = 7)
+dev.off()
+
+
+
+#######################
+# Mean length over time
+#######################
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+
+work = dat %>% 
+		group_by(ModelFishery,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(ModelFishery=work$ModelFishery,YearQtr=work$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+ 
+for (i in 1:nrow(work)) {
+	v = unlist(work[i,Llabel])
+	names(v) = L
+	results[i,1] =  work[i,"ModelFishery"] 
+	results[i,2] =  work[i,"YearQtr"] 
+	results[i,3] =  vQuantile(v,0.025)
+	results[i,4] =  vQuantile(v,0.975)
+	results[i,5] =  vMean(v)
+	if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,5+j]=m[j]
+	 } else {
+		 m = vMode(v,mod0=1)
+		 results[i,6] = m
+	 }
+	cat(i)
+	print(m)
+}
+
+# re = filter(results,!(ModelFishery=="GL" & YearQtr >2021))
+savepng("mode_NOFILTERS.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ ModelFishery, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Year", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+			
+work = dat %>% 
+	group_by(ModelFishery) %>% 
+	summarise_at(c(Llabel),list(Sum))
+work[,Llabel] = work[,Llabel]/rowSums(work[,Llabel])
+
+tempFUN = function(i) {
+	temp = work[work$ModelFishery == ModelFisheries[i],Llabel]
+	plot(L,temp[,Llabel],col='blue',xlab="", ylab="", lwd=2,type='l',xlim=range(L),ylim=c(0,max(temp[,Llabel])))
+	lines(range(L), rep(0,2), lty=3)
+	polygon(c(L,rev(range(L))), c(temp[,Llabel], rep(0,2)), col="gray")
+	mtext(side=3,paste(ModelFisheries[i]),line=0.1,cex=1.2)
+}
+
+savepng('Aggregated_NOFILTERS.png',width=15,height=25)
+par(mfrow=c(4,2), mar=c(2,2,2,1),oma=c(2,2,1,1))
+tempFUN(i = 1)
+tempFUN(i = 2)
+tempFUN(i = 3)
+tempFUN(i = 4)
+tempFUN(i = 5)
+tempFUN(i = 6)
+tempFUN(i = 7)
+dev.off()
+
+
+
+#######################
+# Mean length over time - area - MDV - PL
+#######################
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+
+workPL = dat %>% 
+  filter(ModelFishery == "PL") %>%
+		group_by(ModelFishery,Grid,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(Grid=workPL$Grid,YearQtr=workPL$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+ 
+for (i in 1:nrow(workPL)) {
+	v = unlist(workPL[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL[i,"Grid"] 
+	results[i,2] =  workPL[i,"YearQtr"] 
+	results[i,3] =  vQuantile(v,0.025)
+	results[i,4] =  vQuantile(v,0.975)
+	results[i,5] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,5+j]=m[j]
+	 # } else {
+		 # m = vMode(v,mod0=1)
+		 # results[i,6] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+# re = filter(results,!(ModelFishery=="GL" & YearQtr >2021))
+savepng("modePL_NOFILTERS.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ Grid, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+#######################
+# Mean length over time - qtr - MDV - PL
+#######################
+results = data.frame(Grid=workPL$Grid,Year = workPL$Year, YearQtr=workPL$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+for (i in 1:nrow(workPL)) {
+	v = unlist(workPL[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL[i,"Grid"] 
+	results[i,2] =  workPL[i, "Year"]
+	results[i,3] =  workPL[i,"YearQtr"] 
+	results[i,4] =  vQuantile(v,0.025)
+	results[i,5] =  vQuantile(v,0.975)
+	results[i,6] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,6+j]=m[j]
+	 # } else {
+		 # m = vMode(v,mod0=1)
+		 # results[i,6] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+
+
+re <- results %>% filter(Grid == "5100073")
+savepng("modePL_qtr_NOFILTERS.png",height=25,width=25)
+ggplot(data = re, aes(x = YearQtr)) +
+  facet_wrap(~ Year, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+#######################
+# Mean length over time - qtr - MDV - SchoolType - PL
+#######################
+
+workPL_ST = dat %>% 
+  filter(ModelFishery == "PL") %>%
+		group_by(ModelFishery,SchoolType,Grid,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(Grid=workPL_ST$Grid,Year = workPL_ST$Year, YearQtr=workPL_ST$YearQtr,SchoolType = workPL_ST$SchoolType,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+
+for (i in 1:nrow(workPL_ST)) {
+	v = unlist(workPL_ST[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL_ST[i,"Grid"] 
+	results[i,2] =  workPL_ST[i, "Year"]
+	results[i,3] =  workPL_ST[i,"YearQtr"]
+	results[i,4] =  workPL_ST[i,"SchoolType"]
+	results[i,5] =  vQuantile(v,0.025)
+	results[i,6] =  vQuantile(v,0.975)
+	results[i,7] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		#  m = vMode(v,mod0=2)
+		#  for (j in 1:min(length(m),2))
+		# 	results[i,7+j]=m[j]
+	 # } else {
+		 m = vMode(v,mod0=1)
+		 results[i,7] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+re <- results %>% filter(Grid == "5100073", Year > 2010)
+savepng("modePL_schooltype_NOFILTERS.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ SchoolType, ncol = 7) + #, scales = "free_y") +
+  geom_point(aes(y = mean), col = "green4", na.rm = TRUE) + 
+  # geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  # scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020),#, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024), 
+                     labels = c(1980, 1990, 2000, 2010, 2020)) + #2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+
+
+
+
+#######################
+# length distribution over time
+#######################
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+years = sort(unique(dat$Year))
+work = dat %>% 
+	dplyr::group_by(ModelFishery,Year) %>% 
+	dplyr::summarise_at(Llabel,list(Sum)) %>%
+	tidyr::gather(length,total,L020:L096) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	dplyr::group_by(ModelFishery,Year) %>%
+	dplyr::group_modify(.f = function(.x,...) data.frame(length=.x$length,n=sum(.x$total),total=.x$total/max(.x$total))) %>%
+	dplyr::mutate(Year = factor(Year,levels=years))
+	#dplyr::group_modify(~{.x %>% mutate(total=total/sum(total))})
+ 	#dplyr::group_modify(~ ggplot2:::compute_density(.x$length,.x$total,from =10,to=198)) %>% dplyr::rename(length=x,total=density)
+
+workPL2 <- work %>% filter(ModelFishery == "PL")
+
+savepng('PL length Distribution_NOFILTERS.png',width=30,height=25)
+ggplot(workPL2, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+workGL <- work %>% filter(ModelFishery == "GL")
+savepng('GL length Distribution_NOFILTERS.png',width=30,height=25)
+ggplot(workGL, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "GILLNET Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workLL <- work %>% filter(ModelFishery == "LL")
+savepng('LL length Distribution_NOFILTERS.png',width=30,height=25)
+ggplot(workLL, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "LONGLINE Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workLI <- work %>% filter(ModelFishery == "LI")
+savepng('LI length Distribution_NOFILTERS.png',width=30,height=25)
+ggplot(workLI, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "LINE Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workOT <- work %>% filter(ModelFishery == "Other")
+savepng('OT length Distribution_NOFILTERS.png',width=30,height=25)
+ggplot(workOT, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "OTHER Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+```
+
+### Output LF data to SS3 - Filter from previous assessment
+
+```{r secondLF_filter}  
+
+attach(paste0(PATH_SS3_INPUT,"CE_1a_input.object"))
+attach(paste0(PATH_SS3_INPUT,"LF_1_input.object"))
+dataCE = CE_1a_INPUT_OBJECT[['data']]
+data = LF_1_INPUT_OBJECT[['data']]
+
+
+## second - filtering from previous assessment:
+
+L_labels  = c(Paste("L0",seq(10,98,by=1)))
+
+work = data %>% 
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'FLL' & SchoolType == "UNCL" & (Year %in% c(2016:2020))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GILL' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2021,2022))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GIOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'HAND' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'LLCO' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RIN'  & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RNOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2018,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'TROL' & SchoolType == "UNCL" )) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "FS" & (Year %in% c(2019)))) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016,2018,2019,2020)))) %>%	
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BBOF' & SchoolType == "UNCL"& (Year %in% c(2018,2019)))) %>%	
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PS'  & SchoolType == "UNCL" & (Year %in% c(1988:2000,2014))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "LS" & (Year %in% c(2021))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "UNCL" & (Year %in% c(2022)))) %>%
+    dplyr::filter(!(Country == 'THA' &  Gear == 'PSS' & SchoolType== "UNCL" & (Year %in% c(2005:2009,2011:2015,2020:2022)))) %>%
+	dplyr::filter(!(Country == 'SYC' &  Gear == 'PS' & SchoolType == "UNCL" & (Year %in% c(2021))))  %>%
+	dplyr::filter(!(ModelFishery == 'PL' & (Year < 2000 | Year %in% 2015:2016))) %>%
+	dplyr::filter(!(ModelFishery %in% c('GL','Other') & Year  %in% c(2007:2010,2021))) %>%
+	dplyr::filter(!(ModelFishery %in% c('LI') & Year  < 2018)) %>%
+	dplyr::filter(!(ModelFishery %in% c('LL') & Year  < 2011)) %>%
+	dplyr::group_by(ModelFishery,ModelFleet,Year,Quarter) %>% 
+	dplyr::summarise_at(L_labels,list(Sum)) %>%
+	as.data.frame() %>%
+	tidyr::gather(length,total,L010:L098) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	mutate(length = ifelse(length < 20, 20, length)) %>% 
+	mutate(length = ifelse(length > 96, 96, length)) %>%
+	mutate(length = 20+((length-20) %/% 4) * 4) %>%
+	mutate(length = ifelse(length<100,Paste("L0",length),Paste("L",length))) %>%
+	dplyr::group_by(ModelFishery,ModelFleet,Year,Quarter,length) %>% 
+	dplyr::summarise_at("total",list(Sum)) %>% 
+	tidyr::spread(length,total,fill=0) %>% 
+	as.data.frame()
+
+
+L_labels  = c(Paste("L0",seq(20,96,by=4)))
+work = work %>%
+	mutate(sno=rowSums(select(work,L020:L096))) %>%	
+	mutate(Nsamp = ifelse(ModelFishery == 'Other',pmin(sno/10,100), pmin(sno/10,1000))) %>%
+	mutate(Quarter = Quarter*3-0.5,Gender = 0,Part = 0) %>%
+	dplyr::select(Year,Quarter,ModelFleet,Gender,Part,Nsamp,all_of(L_labels)) %>%
+	dplyr::arrange(ModelFleet,Year,Quarter)		
+
+work[,L_labels][work[,L_labels]==0] = 1e-10
+write.table(work,'temp.dat',row.names=F,sep='\t')
+			
+	
+LF_1_INPUT_OBJECT[["data"]] = data
+
+	
+max(data$Year)
+max(work$Year)
+	
+
+	
+save(file="LF_1_INPUT.object",list=c("LF_1_INPUT_OBJECT"))
+
+
+### Save SS3 LF input
+
+save(file=paste0(PATH_SS3_INPUT,"LF_1_INPUT.object"),list=c("LF_1_INPUT_OBJECT")) 
+write.csv(work, file =paste0(PATH_SS3_INPUT,"SS3LFinput2.csv")) # in data.ss file
+
+
+
+```
+
+### Plots of LF data - filtering from last assessment
+
+```{r plots_LF_data_last_ass_filter}
+
+attach(paste0(PATH_SS3_INPUT,"CE_1a_input.object"))
+attach(paste0(PATH_SS3_INPUT,"LF_1_input.object"))
+dataCE = CE_1a_INPUT_OBJECT[['data']]
+data = LF_1_INPUT_OBJECT[['data']]
+
+
+GRID_PARAM=setup_GRID_PARAM()
+GRID = setup_GRID(GRID_PARAM)
+
+###############
+# Coverage
+###############
+
+
+ModelFisheries = c('PL','PSLS','PSFS','GL','LI','LL','Other')
+work = dataCE
+catchmat <- matrix(NA, 7,2)
+for(i in 1:7){
+	catchmat[i,1] <- min(work[work$ModelFishery == ModelFisheries[i] & work$Catch  > 0,'Year'])
+	catchmat[i,2] <- max(work[work$ModelFishery == ModelFisheries[i] & work$Catch  > 0,'Year'])
+}
+
+
+###############
+# Assessment LF
+###############
+
+L_labels  = c(Paste("L0",seq(10,98,by=1)))
+dat = data %>% 
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'FLL' & SchoolType == "UNCL" & (Year %in% c(2016:2020))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GILL' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2021,2022))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GIOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'HAND' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'LLCO' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RIN'  & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RNOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2018,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'TROL' & SchoolType == "UNCL" )) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "FS" & (Year %in% c(2019)))) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016,2018,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BBOF' & SchoolType == "UNCL"& (Year %in% c(2018,2019)))) %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PS'  & SchoolType == "UNCL" & (Year %in% c(1988:2000,2014))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "LS" & (Year %in% c(2021))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "UNCL" & (Year %in% c(2022)))) %>%
+    dplyr::filter(!(Country == 'THA' &  Gear == 'PSS' & SchoolType== "UNCL" & (Year %in% c(2005:2009,2011:2015,2020:2022)))) %>%
+	dplyr::filter(!(Country == 'SYC' &  Gear == 'PS' & SchoolType == "UNCL" & (Year %in% c(2021))))  %>%
+	dplyr::filter(!(ModelFishery == 'PL' & (Year < 2000 | Year %in% 2015:2016))) %>%
+	dplyr::filter(!(ModelFishery %in% c('GL','Other') & Year  %in% 2007:2010)) %>%
+	dplyr::filter(!(ModelFishery %in% c('LI') & Year  < 2018)) %>%
+	dplyr::filter(!(ModelFishery %in% c('LL') & Year  < 2011)) %>%
+	dplyr::group_by(Year, Quarter, Month,   Grid, Lat, Long, AssessmentArea, ModelArea, FisheryCode, ModelFishery, ModelFleet, Country, Gear, SchoolType) %>% 
+	dplyr::summarise_at(L_labels,list(Sum)) %>%
+	as.data.frame() %>%
+	tidyr::gather(length,total,L010:L098) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	mutate(length = ifelse(length < 20, 20, length)) %>% 
+	mutate(length = ifelse(length > 98, 98, length)) %>%
+	mutate(length = 20+((length-20) %/% 4) * 4) %>%
+	mutate(length = ifelse(length<100,Paste("L0",length),Paste("L",length))) %>%
+	dplyr::group_by(Year, Quarter, Month,   Grid, Lat, Long, AssessmentArea, ModelArea, FisheryCode, ModelFishery, ModelFleet, Country, Gear, SchoolType,length) %>% 	
+	dplyr::summarise_at("total",list(Sum)) %>% 
+	tidyr::spread(length,total,fill=0) %>% 
+	as.data.frame()
+
+
+
+###############
+# Aggregate LF
+###############
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+			
+work = dat %>% 
+	group_by(ModelFishery) %>% 
+	summarise_at(c(Llabel),list(Sum))
+work[,Llabel] = work[,Llabel]/rowSums(work[,Llabel])
+
+tempFUN = function(i) {
+	temp = work[work$ModelFishery == ModelFisheries[i],Llabel]
+	plot(L,temp[,Llabel],col='blue',xlab="", ylab="", lwd=2,type='l',xlim=range(L),ylim=c(0,max(temp[,Llabel])))
+	lines(range(L), rep(0,2), lty=3)
+	polygon(c(L,rev(range(L))), c(temp[,Llabel], rep(0,2)), col="gray")
+	mtext(side=3,paste(ModelFisheries[i]),line=0.1,cex=1.2)
+}
+
+savepng('Aggregated_23_ASS_FILTER.png',width=15,height=25)
+par(mfrow=c(4,2), mar=c(2,2,2,1),oma=c(2,2,1,1))
+tempFUN(i = 1)
+tempFUN(i = 2)
+tempFUN(i = 3)
+tempFUN(i = 4)
+tempFUN(i = 5)
+tempFUN(i = 6)
+tempFUN(i = 7)
+dev.off()
+
+
+
+#######################
+# Mean length over time
+#######################
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+
+work = dat %>% 
+		group_by(ModelFishery,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(ModelFishery=work$ModelFishery,YearQtr=work$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+ 
+for (i in 1:nrow(work)) {
+	v = unlist(work[i,Llabel])
+	names(v) = L
+	results[i,1] =  work[i,"ModelFishery"] 
+	results[i,2] =  work[i,"YearQtr"] 
+	results[i,3] =  vQuantile(v,0.025)
+	results[i,4] =  vQuantile(v,0.975)
+	results[i,5] =  vMean(v)
+	if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,5+j]=m[j]
+	 } else {
+		 m = vMode(v,mod0=1)
+		 results[i,6] = m
+	 }
+	cat(i)
+	print(m)
+}
+
+# re = filter(results,!(ModelFishery=="GL" & YearQtr >2021))
+savepng("mode_23_ASS_FILTER.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ ModelFishery, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Year", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+			
+work = dat %>% 
+	group_by(ModelFishery) %>% 
+	summarise_at(c(Llabel),list(Sum))
+work[,Llabel] = work[,Llabel]/rowSums(work[,Llabel])
+
+tempFUN = function(i) {
+	temp = work[work$ModelFishery == ModelFisheries[i],Llabel]
+	plot(L,temp[,Llabel],col='blue',xlab="", ylab="", lwd=2,type='l',xlim=range(L),ylim=c(0,max(temp[,Llabel])))
+	lines(range(L), rep(0,2), lty=3)
+	polygon(c(L,rev(range(L))), c(temp[,Llabel], rep(0,2)), col="gray")
+	mtext(side=3,paste(ModelFisheries[i]),line=0.1,cex=1.2)
+}
+
+savepng('Aggregated_23_ASS_FILTER.png',width=15,height=25)
+par(mfrow=c(4,2), mar=c(2,2,2,1),oma=c(2,2,1,1))
+tempFUN(i = 1)
+tempFUN(i = 2)
+tempFUN(i = 3)
+tempFUN(i = 4)
+tempFUN(i = 5)
+tempFUN(i = 6)
+tempFUN(i = 7)
+dev.off()
+
+
+
+#######################
+# Mean length over time - area - MDV - PL
+#######################
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+
+workPL = dat %>% 
+  filter(ModelFishery == "PL") %>%
+		group_by(ModelFishery,Grid,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(Grid=workPL$Grid,YearQtr=workPL$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+ 
+for (i in 1:nrow(workPL)) {
+	v = unlist(workPL[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL[i,"Grid"] 
+	results[i,2] =  workPL[i,"YearQtr"] 
+	results[i,3] =  vQuantile(v,0.025)
+	results[i,4] =  vQuantile(v,0.975)
+	results[i,5] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,5+j]=m[j]
+	 # } else {
+		 # m = vMode(v,mod0=1)
+		 # results[i,6] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+# re = filter(results,!(ModelFishery=="GL" & YearQtr >2021))
+savepng("modePL_23_ASS_FILTER.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ Grid, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+#######################
+# Mean length over time - qtr - MDV - PL
+#######################
+results = data.frame(Grid=workPL$Grid,Year = workPL$Year, YearQtr=workPL$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+for (i in 1:nrow(workPL)) {
+	v = unlist(workPL[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL[i,"Grid"] 
+	results[i,2] =  workPL[i, "Year"]
+	results[i,3] =  workPL[i,"YearQtr"] 
+	results[i,4] =  vQuantile(v,0.025)
+	results[i,5] =  vQuantile(v,0.975)
+	results[i,6] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,6+j]=m[j]
+	 # } else {
+		 # m = vMode(v,mod0=1)
+		 # results[i,6] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+
+
+re <- results %>% filter(Grid == "5100073")
+savepng("modePL_qtr_23_ASS_FILTER.png",height=25,width=25)
+ggplot(data = re, aes(x = YearQtr)) +
+  facet_wrap(~ Year, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+#######################
+# Mean length over time - qtr - MDV - SchoolType - PL
+#######################
+
+workPL_ST = dat %>% 
+  filter(ModelFishery == "PL") %>%
+		group_by(ModelFishery,SchoolType,Grid,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(Grid=workPL_ST$Grid,Year = workPL_ST$Year, YearQtr=workPL_ST$YearQtr,SchoolType = workPL_ST$SchoolType,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+
+for (i in 1:nrow(workPL_ST)) {
+	v = unlist(workPL_ST[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL_ST[i,"Grid"] 
+	results[i,2] =  workPL_ST[i, "Year"]
+	results[i,3] =  workPL_ST[i,"YearQtr"]
+	results[i,4] =  workPL_ST[i,"SchoolType"]
+	results[i,5] =  vQuantile(v,0.025)
+	results[i,6] =  vQuantile(v,0.975)
+	results[i,7] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		#  m = vMode(v,mod0=2)
+		#  for (j in 1:min(length(m),2))
+		# 	results[i,7+j]=m[j]
+	 # } else {
+		 m = vMode(v,mod0=1)
+		 results[i,7] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+re <- results %>% filter(Grid == "5100073", Year > 2010)
+savepng("modePL_schooltype_23_ASS_FILTER.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ SchoolType, ncol = 7) + #, scales = "free_y") +
+  geom_point(aes(y = mean), col = "green4", na.rm = TRUE) + 
+  # geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  # scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020),#, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024), 
+                     labels = c(1980, 1990, 2000, 2010, 2020)) + #2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+
+
+
+
+#######################
+# length distribution over time
+#######################
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+years = sort(unique(dat$Year))
+work = dat %>% 
+	dplyr::group_by(ModelFishery,Year) %>% 
+	dplyr::summarise_at(Llabel,list(Sum)) %>%
+	tidyr::gather(length,total,L020:L096) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	dplyr::group_by(ModelFishery,Year) %>%
+	dplyr::group_modify(.f = function(.x,...) data.frame(length=.x$length,n=sum(.x$total),total=.x$total/max(.x$total))) %>%
+	dplyr::mutate(Year = factor(Year,levels=years))
+	#dplyr::group_modify(~{.x %>% mutate(total=total/sum(total))})
+ 	#dplyr::group_modify(~ ggplot2:::compute_density(.x$length,.x$total,from =10,to=198)) %>% dplyr::rename(length=x,total=density)
+
+workPL2 <- work %>% filter(ModelFishery == "PL")
+
+savepng('PL length Distribution_23_ASS_FILTER.png',width=30,height=25)
+ggplot(workPL2, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+workGL <- work %>% filter(ModelFishery == "GL")
+savepng('GL length Distribution_23_ASS_FILTER.png',width=30,height=25)
+ggplot(workGL, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "GILLNET Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workLL <- work %>% filter(ModelFishery == "LL")
+savepng('LL length Distribution_23_ASS_FILTER.png',width=30,height=25)
+ggplot(workLL, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "LONGLINE Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workLI <- work %>% filter(ModelFishery == "LI")
+savepng('LI length Distribution_23_ASS_FILTER.png',width=30,height=25)
+ggplot(workLI, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "LINE Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workOT <- work %>% filter(ModelFishery == "Other")
+savepng('OT length Distribution_23_ASS_FILTER.png',width=30,height=25)
+ggplot(workOT, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "OTHER Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+```
+
+### Output LF data to SS3 - 2026 filter
+
+Remove fish larger than 120 cm, considering the maximum size for a skipjack is thought to be 110 cm.
+
+```{r read_LF_data_2}
+ModelFisheries =c('PL','PSLS','PSFS','GL',"LI","LL","Other")
+
+# Data <- read_csv(make.filename(file = "IOTC-DATASETS-SF-SKJ-1982-2024-WIDE-FORMAT.csv",path=paste0(PATH_DATA, "LF/")))
+Data <- read_csv(make.filename(file = "IOTC-2026-WPTT28-DATA06-SKJ-1982-2025-WIDE-FORMAT.csv",path=paste0(PATH_DATA, "LF/")))
+Data <- Data %>% 
+	dplyr::rename(Fleet = FLEET_CODE,Year=YEAR,MonthStart=MONTH_START,MonthEnd =MONTH_END,Grid =FISHING_GROUND_CODE, Gear = GEAR_CODE,Species =SPECIES_CODE,SchoolType=SCHOOL_TYPE_CODE, MeasureType =MEASURE_TYPE_CODE,	FirstClassLow =FIRST_CLASS_LOW,	SizeInterval =SIZE_INTERVAL,TnoFish =NO_FISH,TkgFish = KG_FISH)
+
+
+dHelper <- read_excel(make.filename(file = "helper.xlsx",path=paste0(PATH_DATA,"CE/")),sheet = "LF") 
+dHelper = dHelper %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='BB', 'PL')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Gillnet', 'GL')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Line', 'LI')) %>% 
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='Longline', 'LL')) %>% 	
+		dplyr::mutate(Fishery=replace(Fishery, Fishery=='OTHER', 'Other')) %>% 	
+		dplyr::mutate(Fishery=replace(Fishery, Gear %in% c('TROL','TROLM','TROLN'), 'Other')) %>% 		
+		dplyr::select(Fleet,Gear,SchoolType,Fishery)
+	
+
+Data = Data %>% 
+		dplyr::left_join(dHelper,by=c("Gear"="Gear","Fleet"="Fleet","SchoolType"="SchoolType")) %>% 
+	    dplyr::mutate(LatCell = 0, LongCell = 0) %>%
+		mutate_cond(substring(Grid,1,1) == "5",LatCell=1,LongCell=1) %>%
+		mutate_cond(substring(Grid,1,1) == "6",LatCell=5,LongCell=5) %>%
+		mutate_cond(substring(Grid,1,1) == "1",LatCell=5,LongCell=10) %>%
+		mutate_cond(substring(Grid,1,1) == "2",LatCell=10,LongCell=20) %>%
+		mutate_cond(substring(Grid,1,1) == "3",LatCell=10,LongCell=10) %>%
+		mutate_cond(substring(Grid,1,1) == "4",LatCell=20,LongCell=20) %>%
+		dplyr::filter(!(LatCell == 0 & LongCell == 0)) %>%
+		dplyr::mutate(quadrant = as.numeric(substring(Grid,2,2)), Lat=999,Long=999)  %>%
+		mutate_cond(quadrant ==1,Lat= as.numeric(substring(Grid,3,4)) + LatCell/2, Long = as.numeric(substring(Grid,5,7)) + LongCell/2) %>%
+		mutate_cond(quadrant ==2,Lat= -as.numeric(substring(Grid,3,4)) - LatCell/2, Long = as.numeric(substring(Grid,5,7)) + LongCell/2) %>%
+		dplyr::mutate(FisheryCode=Fishery,ModelFishery = factor(Fishery,levels= ModelFisheries), ModelFleet = as.numeric(ModelFishery),Country=trim(Fleet),Grid=as.character(Grid),Month=MonthStart,Quarter = floor((MonthStart-1)/3) + 1,AssessmentArea = 1, ModelArea =1,AssessmentAreaName=1,ModelAreaName=1) %>%				
+		dplyr::select(Year,Quarter,Month,Grid,,Lat,Long,AssessmentArea,ModelArea,FisheryCode,ModelFishery,ModelFleet,Country,Gear,SchoolType,FirstClassLow,SizeInterval,C001:C150)
+		
+C_labels = c(Paste("C00",1:9),Paste("C0",10:99), Paste("C",100:150))
+data = Data %>% 
+	dplyr::group_by(Year,Quarter,Month,Grid,,Lat,Long,AssessmentArea,ModelArea,FisheryCode,ModelFishery,ModelFleet,Country,Gear,SchoolType,FirstClassLow,SizeInterval) %>% 
+	dplyr::summarise_at(C_labels,list(Sum)) %>%
+	as.data.frame() 
+	
+data = data %>%	
+	dplyr::mutate(sno=rowSums(dplyr::select(data,C001:C150))) %>%
+	dplyr::mutate(C089=rowSums(select(data,C089:C150))) %>%		
+	dplyr::select(Year,Quarter,Month,Grid,,Lat,Long,AssessmentArea,ModelArea,FisheryCode,ModelFishery,ModelFleet,Country,Gear,SchoolType,FirstClassLow,SizeInterval,sno,C001:C089) %>% 
+	tidyr::gather(length,total,C001:C089) %>%
+	dplyr::mutate(length = FirstClassLow+(as.numeric(substr(length,2,4))-1)*SizeInterval) %>% 
+	dplyr::mutate(length=ifelse(length<100,Paste("L0",length),Paste("L",length))) %>% 
+	tidyr::spread(length,total,fill=0)
+
+
+wtf <- data %>% filter(is.na(ModelFleet))
+
+wtf2 <- wtf %>%
+  select(Year, Country, Gear, SchoolType, sno) %>%
+  group_by(Year, Country, Gear, SchoolType) %>%
+  summarise(tno = sum(sno))
+#
+#
+wtf3 <- wtf2 %>%
+  select(Country, Gear, SchoolType, tno) %>%
+  group_by(Country, Gear, SchoolType) %>%
+  summarise(ttno = sum(tno))
+
+print(wtf3)
+
+# work1 <- data %>% filter(Country == "LKA", Year == 2012)
+
+# data <- data %>% filter(!is.na(ModelFleet))
+
+
+```
+
+### Do the filtering and plots 2026
+
+```{r filtering_lf_2026}
+
+L_labels  = c(Paste("L0",seq(10,98,by=1)))
+
+work = data %>% 
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'FLL' & SchoolType == "UNCL" & (Year %in% c(2016:2020))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GILL' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2021,2022))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GIOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'HAND' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'LLCO' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RIN'  & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RNOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2018,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'TROL' & SchoolType == "UNCL" )) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "FS" & (Year %in% c(2019)))) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016,2018,2019,2020)))) %>%	
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BBOF' & SchoolType == "UNCL"& (Year %in% c(2018,2019)))) %>%	
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PS'  & SchoolType == "UNCL" & (Year %in% c(1988:2000,2014))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "LS" & (Year %in% c(2021))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "UNCL" & (Year %in% c(2022)))) %>%
+    dplyr::filter(!(Country == 'THA' &  Gear == 'PSS' & SchoolType== "UNCL" & (Year %in% c(2005:2009,2011:2015,2020:2022)))) %>%
+	dplyr::filter(!(Country == 'SYC' &  Gear == 'PS' & SchoolType == "UNCL" & (Year %in% c(2021))))  %>%
+	dplyr::filter(!(ModelFishery == 'PL' & (Year < 2000 | Year %in% 2015:2016))) %>%
+	dplyr::filter(!(ModelFishery %in% c('GL','Other') & Year  %in% c(2007:2010,2021))) %>%
+	dplyr::filter(!(ModelFishery %in% c('LI') & Year  < 2018)) %>%
+	dplyr::filter(!(ModelFishery %in% c('LL') & Year  < 2011)) %>%
+	dplyr::group_by(ModelFishery,ModelFleet,Year,Quarter) %>% 
+	dplyr::summarise_at(L_labels,list(Sum)) %>%
+	as.data.frame() %>%
+	tidyr::gather(length,total,L010:L098) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	mutate(length = ifelse(length < 20, 20, length)) %>% 
+	mutate(length = ifelse(length > 96, 96, length)) %>%
+  filter(length < 121) %>%
+	mutate(length = 20+((length-20) %/% 4) * 4) %>%
+	mutate(length = ifelse(length<100,Paste("L0",length),Paste("L",length))) %>%
+	dplyr::group_by(ModelFishery,ModelFleet,Year,Quarter,length) %>% 
+	dplyr::summarise_at("total",list(Sum)) %>% 
+	tidyr::spread(length,total,fill=0) %>% 
+	as.data.frame()
+
+
+	
+L_labels  = c(Paste("L0",seq(20,96,by=4)))
+
+work = work %>%
+	mutate(sno=rowSums(select(work,L020:L096))) %>%	
+	mutate(Nsamp = ifelse(ModelFishery == 'Other',pmin(sno/10,100), pmin(sno/10,1000))) %>%
+	mutate(Quarter = Quarter*3-0.5,Gender = 0,Part = 0) %>%
+	dplyr::select(Year,Quarter,ModelFleet,Gender,Part,Nsamp,all_of(L_labels)) %>%
+	dplyr::arrange(ModelFleet,Year,Quarter)		
+
+work[,L_labels][work[,L_labels]==0] = 1e-10
+write.table(work,'temp.dat',row.names=F,sep='\t')
+			
+	
+LF_1_INPUT_OBJECT[["data"]] = data
+
+	
+max(data$Year)
+max(work$Year)
+	
+
+save(file="LF_1_INPUT.object",list=c("LF_1_INPUT_OBJECT"))
+### Save SS3 LF input
+
+
+save(file=paste0(PATH_SS3_INPUT,"LF_1_INPUT.object"),list=c("LF_1_INPUT_OBJECT")) 
+write.csv(work, file =paste0(PATH_SS3_INPUT,"SS3LFinput_2026.csv")) # in data.ss file
+
+```
+
+
+
+### Plots LF data 2026
+
+```{r plots_lf_2026}
+
+figure_name = "LF_input_"
+figure_loc = figure_loc
+
+attach(paste0(PATH_SS3_INPUT,"CE_1a_input.object"))
+attach(paste0(PATH_SS3_INPUT,"LF_1_input.object"))
+dataCE = CE_1a_INPUT_OBJECT[['data']]
+data = LF_1_INPUT_OBJECT[['data']]
+
+
+GRID_PARAM=setup_GRID_PARAM()
+GRID = setup_GRID(GRID_PARAM)
+
+library(multimode)
+vMode = function(v,mod0=1) {
+	v = round(v/Sum(v)*100)
+	x = rep(as.numeric(names(v)),v)
+	#return(Mode(x))
+	locations = locmodes(x,mod0)$locations
+	return (locations[is.odd(1:length(locations))])
+}
+
+
+vMean = function(v) {
+	v = round(v/Sum(v)*100)
+	x = rep(as.numeric(names(v)),v)
+	return(Mean(x))
+}
+
+vQuantile = function(v,...) {
+	v = round(v/Sum(v)*100)
+	x = rep(as.numeric(names(v)),v)
+	return(quantile(x,...))
+}
+
+###############
+# Coverage
+###############
+
+
+ModelFisheries = c('PL','PSLS','PSFS','GL','LI','LL','Other')
+work = dataCE
+catchmat <- matrix(NA, 7,2)
+for(i in 1:7){
+	catchmat[i,1] <- min(work[work$ModelFishery == ModelFisheries[i] & work$Catch  > 0,'Year'])
+	catchmat[i,2] <- max(work[work$ModelFishery == ModelFisheries[i] & work$Catch  > 0,'Year'])
+}
+obs <- data %>%
+	dplyr::mutate(ModelFishery = factor(ModelFishery,ModelFisheries)) %>%
+	dplyr::group_by(Year,ModelFishery) %>%
+	dplyr::summarise(n=sum(sno))  %>%
+	as.data.frame() 
+x <- tapply(obs$n, list(obs$Year, obs$ModelFishery), sum)
+x=apply(x,2, function(x) x/Max(x))
+Year <- sort(unique(obs$Year))
+
+
+savepng('coverage_2026.png',width=17.78, height=17.78)
+# par(mar=c(3,3,2,1), omi=c(0,0.2,0,0))
+plot(1,1,type="n", ylim=c(0.5,7.5), xlim=c(1950,2025), ylab="", xlab="", yaxt="n")
+for(i in 1:length(ModelFisheries)){
+	symbols(Year, rep(i,length(Year)), circles=sqrt(x[,i]), fg = 1, bg = "slate grey",add=T, inches=0.2)
+	lines(catchmat[i,], rep(i,2), lwd=2, col=2)
+	text(1940, i, ModelFisheries[i], xpd=NA)
+}
+dev.off()
+
+
+###############
+# Assessment LF
+###############
+
+L_labels  = c(Paste("L0",seq(10,98,by=1)))
+dat = data %>% 
+dplyr::filter(!(Country == 'LKA' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'FLL' & SchoolType == "UNCL" & (Year %in% c(2016:2020))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GILL' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2021,2022))))  %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'GIOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'HAND' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'LLCO' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RIN'  & SchoolType == "UNCL" & (Year %in% c(2016,2017,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'RNOF' & SchoolType == "UNCL" & (Year %in% c(2016,2017,2018,2019,2020,2022)))) %>%
+    dplyr::filter(!(Country == 'LKA' &  Gear == 'TROL' & SchoolType == "UNCL" )) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "FS" & (Year %in% c(2019)))) %>%
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BB' & SchoolType == "UNCL" & (Year %in% c(2016,2018,2019,2020)))) %>%	
+    dplyr::filter(!(Country == 'MDV' &  Gear == 'BBOF' & SchoolType == "UNCL"& (Year %in% c(2018,2019)))) %>%	
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PS'  & SchoolType == "UNCL" & (Year %in% c(1988:2000,2014))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "LS" & (Year %in% c(2021))))  %>%
+    dplyr::filter(!(Country == 'MUS' &  Gear == 'PSOB' & SchoolType == "UNCL" & (Year %in% c(2022)))) %>%
+    dplyr::filter(!(Country == 'THA' &  Gear == 'PSS' & SchoolType== "UNCL" & (Year %in% c(2005:2009,2011:2015,2020:2022)))) %>%
+	dplyr::filter(!(Country == 'SYC' &  Gear == 'PS' & SchoolType == "UNCL" & (Year %in% c(2021))))  %>%
+	dplyr::filter(!(ModelFishery == 'PL' & (Year < 2000 | Year %in% 2015:2016))) %>%
+	dplyr::filter(!(ModelFishery %in% c('GL','Other') & Year  %in% c(2007:2010,2021))) %>%
+	dplyr::filter(!(ModelFishery %in% c('LI') & Year  < 2018)) %>%
+	dplyr::filter(!(ModelFishery %in% c('LL') & Year  < 2011)) %>%
+  
+  dplyr::group_by(Year, Quarter, Month,   Grid, Lat, Long, AssessmentArea, ModelArea, FisheryCode, ModelFishery, ModelFleet, Country, Gear, SchoolType) %>% 
+	dplyr::summarise_at(L_labels,list(Sum)) %>%
+	as.data.frame() %>%
+	tidyr::gather(length,total,L010:L098) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	mutate(length = ifelse(length < 20, 20, length)) %>% 
+	mutate(length = ifelse(length > 98, 98, length)) %>%
+  filter(length < 121) %>%
+	mutate(length = 20+((length-20) %/% 4) * 4) %>%
+	mutate(length = ifelse(length<100,Paste("L0",length),Paste("L",length))) %>%
+	dplyr::group_by(Year, Quarter, Month,   Grid, Lat, Long, AssessmentArea, ModelArea, FisheryCode, ModelFishery, ModelFleet, Country, Gear, SchoolType,length) %>% 	
+	dplyr::summarise_at("total",list(Sum)) %>% 
+	tidyr::spread(length,total,fill=0) %>% 
+	as.data.frame()
+
+  
+
+
+###############
+# Aggregate LF
+###############
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+			
+work = dat %>% 
+	group_by(ModelFishery) %>% 
+	summarise_at(c(Llabel),list(Sum))
+work[,Llabel] = work[,Llabel]/rowSums(work[,Llabel])
+
+tempFUN = function(i) {
+	temp = work[work$ModelFishery == ModelFisheries[i],Llabel]
+	plot(L,temp[,Llabel],col='blue',xlab="", ylab="", lwd=2,type='l',xlim=range(L),ylim=c(0,max(temp[,Llabel])))
+	lines(range(L), rep(0,2), lty=3)
+	polygon(c(L,rev(range(L))), c(temp[,Llabel], rep(0,2)), col="gray")
+	mtext(side=3,paste(ModelFisheries[i]),line=0.1,cex=1.2)
+}
+
+savepng('Aggregated_2026.png',width=15,height=25)
+par(mfrow=c(4,2), mar=c(2,2,2,1),oma=c(2,2,1,1))
+tempFUN(i = 1)
+tempFUN(i = 2)
+tempFUN(i = 3)
+tempFUN(i = 4)
+tempFUN(i = 5)
+tempFUN(i = 6)
+tempFUN(i = 7)
+dev.off()
+
+
+
+#######################
+# Mean length over time
+#######################
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+
+work = dat %>% 
+		group_by(ModelFishery,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(ModelFishery=work$ModelFishery,YearQtr=work$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+ 
+for (i in 1:nrow(work)) {
+	v = unlist(work[i,Llabel])
+	names(v) = L
+	results[i,1] =  work[i,"ModelFishery"] 
+	results[i,2] =  work[i,"YearQtr"] 
+	results[i,3] =  vQuantile(v,0.025)
+	results[i,4] =  vQuantile(v,0.975)
+	results[i,5] =  vMean(v)
+	if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,5+j]=m[j]
+	 } else {
+		 m = vMode(v,mod0=1)
+		 results[i,6] = m
+	 }
+	cat(i)
+	print(m)
+}
+
+# re = filter(results,!(ModelFishery=="GL" & YearQtr >2021))
+savepng("mode_2026.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ ModelFishery, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Year", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+			
+work = dat %>% 
+	group_by(ModelFishery) %>% 
+	summarise_at(c(Llabel),list(Sum))
+work[,Llabel] = work[,Llabel]/rowSums(work[,Llabel])
+
+tempFUN = function(i) {
+	temp = work[work$ModelFishery == ModelFisheries[i],Llabel]
+	plot(L,temp[,Llabel],col='blue',xlab="", ylab="", lwd=2,type='l',xlim=range(L),ylim=c(0,max(temp[,Llabel])))
+	lines(range(L), rep(0,2), lty=3)
+	polygon(c(L,rev(range(L))), c(temp[,Llabel], rep(0,2)), col="gray")
+	mtext(side=3,paste(ModelFisheries[i]),line=0.1,cex=1.2)
+}
+
+savepng('Aggregated_2026.png',width=15,height=25)
+par(mfrow=c(4,2), mar=c(2,2,2,1),oma=c(2,2,1,1))
+tempFUN(i = 1)
+tempFUN(i = 2)
+tempFUN(i = 3)
+tempFUN(i = 4)
+tempFUN(i = 5)
+tempFUN(i = 6)
+tempFUN(i = 7)
+dev.off()
+
+
+
+#######################
+# Mean length over time - area - MDV - PL
+#######################
+
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+L = as.numeric(substr(Llabel,2,4))
+
+workPL = dat %>% 
+  filter(ModelFishery == "PL") %>%
+		group_by(ModelFishery,Grid,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(Grid=workPL$Grid,YearQtr=workPL$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+ 
+for (i in 1:nrow(workPL)) {
+	v = unlist(workPL[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL[i,"Grid"] 
+	results[i,2] =  workPL[i,"YearQtr"] 
+	results[i,3] =  vQuantile(v,0.025)
+	results[i,4] =  vQuantile(v,0.975)
+	results[i,5] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,5+j]=m[j]
+	 # } else {
+		 # m = vMode(v,mod0=1)
+		 # results[i,6] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+# re = filter(results,!(ModelFishery=="GL" & YearQtr >2021))
+savepng("modePL_2026.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ Grid, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+#######################
+# Mean length over time - qtr - MDV - PL
+#######################
+results = data.frame(Grid=workPL$Grid,Year = workPL$Year, YearQtr=workPL$YearQtr,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+for (i in 1:nrow(workPL)) {
+	v = unlist(workPL[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL[i,"Grid"] 
+	results[i,2] =  workPL[i, "Year"]
+	results[i,3] =  workPL[i,"YearQtr"] 
+	results[i,4] =  vQuantile(v,0.025)
+	results[i,5] =  vQuantile(v,0.975)
+	results[i,6] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		 m = vMode(v,mod0=2)
+		 for (j in 1:min(length(m),2))
+			results[i,6+j]=m[j]
+	 # } else {
+		 # m = vMode(v,mod0=1)
+		 # results[i,6] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+
+
+re <- results %>% filter(Grid == "5100073")
+savepng("modePL_qtr_2026.png",height=25,width=25)
+ggplot(data = re, aes(x = YearQtr)) +
+  facet_wrap(~ Year, nrow = 7, scales = "free_y") +
+  geom_point(aes(y = mode1), col = "green4", na.rm = TRUE) + 
+  geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020, 2030), 
+                     labels = c(1980, 1990, 2000, 2010, 2020, 2030)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+#######################
+# Mean length over time - qtr - MDV - SchoolType - PL
+#######################
+
+workPL_ST = dat %>% 
+  filter(ModelFishery == "PL") %>%
+		group_by(ModelFishery,SchoolType,Grid,Year,Quarter) %>% 
+		summarise_at(c(Llabel),list(Sum)) %>% 
+		as.data.frame() %>% 
+		mutate(YearQtr = Year + (Quarter-1)/4+1/8)
+
+results = data.frame(Grid=workPL_ST$Grid,Year = workPL_ST$Year, YearQtr=workPL_ST$YearQtr,SchoolType = workPL_ST$SchoolType,lo=NA,hi=NA, mean=NA,mode1=NA, mode2=NA,mode3=NA, mode4=NA, mode5=NA)
+
+for (i in 1:nrow(workPL_ST)) {
+	v = unlist(workPL_ST[i,Llabel])
+	names(v) = L
+	results[i,1] =  workPL_ST[i,"Grid"] 
+	results[i,2] =  workPL_ST[i, "Year"]
+	results[i,3] =  workPL_ST[i,"YearQtr"]
+	results[i,4] =  workPL_ST[i,"SchoolType"]
+	results[i,5] =  vQuantile(v,0.025)
+	results[i,6] =  vQuantile(v,0.975)
+	results[i,7] =  vMean(v)
+	# if (work[i,"ModelFishery"]=="PL") {
+		#  m = vMode(v,mod0=2)
+		#  for (j in 1:min(length(m),2))
+		# 	results[i,7+j]=m[j]
+	 # } else {
+		 m = vMode(v,mod0=1)
+		 results[i,7] = m
+	 # }
+	cat(i)
+	print(m)
+}
+
+re <- results %>% filter(Grid == "5100073", Year > 2010)
+savepng("modePL_schooltype_2026.png",height=25,width=25)
+ggplot(data = results, aes(x = YearQtr)) +
+  facet_wrap(~ SchoolType, ncol = 7) + #, scales = "free_y") +
+  geom_point(aes(y = mean), col = "green4", na.rm = TRUE) + 
+  # geom_point(aes(y = mode2), col = "purple", na.rm = TRUE) +
+  # scale_y_continuous(expand = expansion(mult = c(0.05, 0.05))) +
+  geom_errorbar(aes(ymin = lo, ymax = hi), linewidth = 0.5, width = 0, col = "gray50", na.rm = TRUE) +
+  scale_x_continuous(breaks = c(1980, 1990, 2000, 2010, 2020),#, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024), 
+                     labels = c(1980, 1990, 2000, 2010, 2020)) + #2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024)) +  	
+  labs(x = "Grid", y = "Length (cm)") + 
+  theme_bw()
+dev.off()
+
+
+
+
+
+#######################
+# length distribution over time
+#######################
+
+Llabel = c(Paste("L0",seq(20,98,by=4)))
+years = sort(unique(dat$Year))
+work = dat %>% 
+	dplyr::group_by(ModelFishery,Year) %>% 
+	dplyr::summarise_at(Llabel,list(Sum)) %>%
+	tidyr::gather(length,total,L020:L096) %>%
+	dplyr::mutate(length=as.numeric(substr(length,2,4))) %>%
+	dplyr::group_by(ModelFishery,Year) %>%
+	dplyr::group_modify(.f = function(.x,...) data.frame(length=.x$length,n=sum(.x$total),total=.x$total/max(.x$total))) %>%
+	dplyr::mutate(Year = factor(Year,levels=years))
+	#dplyr::group_modify(~{.x %>% mutate(total=total/sum(total))})
+ 	#dplyr::group_modify(~ ggplot2:::compute_density(.x$length,.x$total,from =10,to=198)) %>% dplyr::rename(length=x,total=density)
+
+workPL2 <- work %>% filter(ModelFishery == "PL")
+
+savepng('PL length Distribution_2026.png',width=30,height=25)
+ggplot(workPL2, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "PL Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+workGL <- work %>% filter(ModelFishery == "GL")
+savepng('GL length Distribution_2026.png',width=30,height=25)
+ggplot(workGL, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "GILLNET Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workLL <- work %>% filter(ModelFishery == "LL")
+savepng('LL length Distribution_2026.png',width=30,height=25)
+ggplot(workLL, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "LONGLINE Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workLI <- work %>% filter(ModelFishery == "LI")
+savepng('LI length Distribution_2026.png',width=30,height=25)
+ggplot(workLI, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "LINE Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workOT <- work %>% filter(ModelFishery == "Other")
+savepng('OT length Distribution_2026.png',width=30,height=25)
+ggplot(workOT, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = "identity", scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "OTHER Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+workPSLS <- work %>% filter(ModelFishery == "PSLS")
+savepng('PSLS length distribution_2026.png', width = 30, height = 25)
+ggplot(workPSLS, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = 'identity', scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "PSLS Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+workPSFS <- work %>% filter(ModelFishery == "PSFS")
+savepng('PSFS length distribution_2026.png', width = 30, height = 25)
+ggplot(workPSFS, aes(x = length, y = Year, height = total, fill = Year)) +
+  geom_ridgeline(stat = 'identity', scale = 1, alpha = 0.8, min_height = 0.001) +
+  theme_ridges() +
+  labs(
+    x = "Length (cm)",
+    y = "Year",
+    title = "PSFS Yearly Length Frequency Histograms"
+  ) +
+  scale_fill_viridis_d(guide = "none")
+dev.off()
+
+
+```
+
+## CPUE data 
+
+-   CPUE.1.input.R
+
+This section involves taking the joint CPUE for SKJ (calculated / estimated / modelled externally) and formats it ready for inclusion in SS3.
+
+### Set up the data and folders
+
+```{r CPUE_data}
+
+figure_name = "CPUE_1_INPUT_comp"
+CPUE_1_INPUT_OBJECT=list()
+creep = function(index,Q,first.included=FALSE) {
+	divisor = Q^((0:(length(index)-1)) + first.included)
+	index/divisor
+}
+
+```
+
+### Read in CPUE data from spreadsheets
+
+Read in the data from the SS3 output for graphing.
+
+```{r read_SS3 data}
+
+data <- read.csv(make.filename(file = "SKJ_CPUE.csv", path=paste0(PATH_DATA,"CPUE/")))
+
+data = transform(data, YrQtr = Year +(Quarter-1)/4 +0.125)
+
+```
+
+```{r CPUE}
+
+savepng('PL vs. PS indices .png',width=17.78,height=17.78)
+work = subset(data,Fleet %in% c("MDV_PL","PSLS_long","BAI", "ABBI")) 
+work$Fleet = factor(work$Fleet,c("MDV_PL","PSLS_long","BAI", "ABBI"))
+work = plyr::ddply(work,c("Fleet"),.fun=function(d) {d$Index=d$Index/mean(d$Index); return (d)})
+ggplot(data=work, aes(x=YrQtr,y=Index,group=Fleet,colour=Fleet,fill=Fleet))+
+		xlab("Year")+ylab("Standardised CPUE")+
+		geom_line(size = 1.1)+
+		#geom_point(size =3, shape=1)+ 
+		scale_x_continuous(limit=c(1990,2025))+
+		scale_colour_manual(name="",values=c("MDV_PL"="#FAC090FF","PSLS_long"="#FF778AFF","BAI"="blue", "ABBI" = "purple"))+
+		theme(legend.position=c(0.75,0.85))
+dev.off()
+
+
+ work = subset(data,Fleet %in% c("PSLS_long"))
+ temp = work[work$Fleet == "PSLS_long",]
+ temp[temp$Year>=1995,'Index']= creep(temp[temp$Year>=1995,'Index'],1.0125^(1/4),FALSE)
+ temp[,'Fleet'] = 'PSLS_long_creep'
+ work = rbind(work,temp)
+
+ savepng('PSLS gear creep.png',width=17.78,height=17.78)
+ ggplot(data=work, aes(x=YrQtr,y=Index,group=Fleet,colour=Fleet,fill=Fleet))+
+		xlab("Year")+ylab("Standardised CPUE")+
+		geom_line(size = 1.1)+
+		#geom_point(size =3, shape=1)+ 
+		scale_y_continuous()+ scale_x_continuous(limit=c(1985,2025))+
+		scale_fill_manual(name="", breaks=c("PSLS_long","PSLS_long_creep"),labels=c("PSLS","PSLS %1 creep"),values=c("#FF778AFF","#FF7AFF"))+
+		scale_colour_manual(name="", breaks=c("PSLS_long","PSLS_long_creep"),labels=c("PSLS","PSLS %1 creep"),values=c("#FF778AFF","#FF7AFF"))+
+		theme(legend.position=c(0.75,0.85))
+ dev.off()
+
+
+ work = subset(data,Fleet %in% c("MDV_PL"))
+ temp = work[work$Fleet == "MDV_PL",]
+ temp[temp$Year>=1995,'Index']= creep(temp[temp$Year>=1995,'Index'],1.0125^(1/4),FALSE)
+ temp[,'Fleet'] = 'MDV_PL_creep'
+ work = rbind(work,temp)
+
+ 
+ savepng('PL gear creep.png',width=17.78,height=17.78)
+ ggplot(data=work, aes(x=YrQtr,y=Index,group=Fleet,colour=Fleet,fill=Fleet))+
+		xlab("Year")+ylab("Standardised CPUE")+
+		geom_line(size = 1.1)+
+		#geom_point(size =3, shape=1)+ 
+		scale_y_continuous()+ scale_x_continuous(limit=c(1985,2025))+
+		scale_fill_manual(name="", breaks=c("MDV_PL","MDV_PL_creep"),labels=c("PL","PL %1 creep"),values=c("#FAC090FF","#FAC902FF"))+
+		scale_colour_manual(name="", breaks=c("MDV_PL","MDV_PL_creep"),labels=c("PL","PL %1 creep"),values=c("#FAC090FF","#FAC902FF"))+
+		theme(legend.position=c(0.75,0.85))
+ dev.off()
+ 
+savepng('PL vs. PS indices four plots .png',width=17.78,height=17.78)
+work = subset(data,Fleet %in% c("MDV_PL","PSLS_long","BAI", "ABBI")) 
+work$Fleet = factor(work$Fleet,c("MDV_PL","PSLS_long","BAI", "ABBI"))
+work = plyr::ddply(work,c("Fleet"),.fun=function(d) {d$Index=d$Index/mean(d$Index); return (d)})
+ggplot(data=work, aes(x=YrQtr,y=Index,colour=Fleet,fill=Fleet))+
+		xlab("Year")+ylab("Standardised CPUE")+
+		geom_line(size = 1) +
+    facet_wrap(~ Fleet) +
+		#geom_point(size =3, shape=1)+ 
+		scale_x_continuous(limit=c(1990,2025))+
+		scale_colour_manual(name="",values=c("MDV_PL"="#FAC090FF","PSLS_long"="#FF778AFF","BAI"="blue", "ABBI" = "purple"))+
+		theme(legend.position=c(0.75,0.85)) +
+  theme_minimal()
+  
+dev.off()
+
+ 
+```
+
+### Output to SS3
+
+```{r output_cpue_SS3}
+
+work = subset(data,Fleet %in% c("MDV_PL","PSLS_long","BAI", "ABBI"))
+work$fleet = ifelse(work$Fleet =="MDV_PL",8,ifelse(work$Fleet =="PSLS_long",9,ifelse(work$Fleet =="BAI",10, ifelse(work$Fleet == "ABBI",11,0))))
+work$se = 0.1
+work$quarter = ifelse(work$Quarter ==1,2.5,ifelse(work$Quarter ==2,5.5,ifelse(work$Quarter ==3,8.5,11.5)))
+work = work[,c("Year","quarter","fleet","Index","se")]
+
+CPUE_1_INPUT_OBJECT[["data"]]=data
+save(file="CPUE_1_INPUT.object",list=c("CPUE_1_INPUT_OBJECT"))
+
+
+write.csv(work, file=paste0(PATH_SS3_INPUT,"SS3_CPUE_2026.csv"))
+
+```
+
+
+###  {.unnumbered}
+
